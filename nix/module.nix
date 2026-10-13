@@ -25,7 +25,7 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    environment.systemPackages = [ cfg.package ];
+    environment.systemPackages = [ cfg.package cloudflared ];
 
     # Without the setcap wrapper gsr-kms-server goes through pkexec on every recorder restart.
     programs.gpu-screen-recorder.enable = true;
