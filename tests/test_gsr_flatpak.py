@@ -100,9 +100,9 @@ _RECORDER = textwrap.dedent('''\
 
 class SandboxedRecorderTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
         self.out = root / "events.txt"
         fake = root / "gpu-screen-recorder"
         fake.write_text(_RECORDER.format(python=sys.executable))
