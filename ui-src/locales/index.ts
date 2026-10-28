@@ -15,11 +15,13 @@ import en from "./en.json";
 import fr from "./fr.json";
 import de_DE from "./de-DE.json";
 import pt_BR from "./pt-BR.json";
+import id from "./id.json";
 
 export const LOCALES = {
   en,
   "de-DE": de_DE,
   fr,
+  id,
   "pt-BR": pt_BR,
 } as const;
 
@@ -28,6 +30,7 @@ export type LocaleName = keyof typeof LOCALES;
 export const LOCALE_LABELS: Record<LocaleName, string> = {
   en: "English",
   fr: "Français",
+  id: "Bahasa Indonesia",
   "pt-BR": "Português Brasileiro",
   "de-DE": "Deutsch",
 };
