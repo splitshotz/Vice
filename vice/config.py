@@ -20,6 +20,7 @@ else:
 
 import tomli_w
 
+from .keys import DEFAULT_KEY_LAYOUT, KEY_LAYOUTS
 from .runtime import actual_home_dir, resolve_path
 
 CONFIG_DIR = actual_home_dir() / ".config" / "vice"
@@ -308,6 +309,10 @@ class OverlayConfig:
     # Also keep the keys pressed during each saved clip beside it, so the
     # viewer can show them afterwards. Only the overlay's keys are stored.
     keys_in_clips: bool = False
+    # Which keyboard the panel's labels are for: qwerty | azerty. The keys
+    # stay where they are and the same physical key lights up either way; only
+    # what is printed on them changes.
+    keys_layout: str = DEFAULT_KEY_LAYOUT
 
 
 @dataclass
@@ -470,6 +475,11 @@ def normalize_overlay(cfg: "Config") -> None:
         ov.keys_scale = 1.0
     ov.keys = bool(ov.keys)
     ov.keys_in_clips = bool(ov.keys_in_clips)
+    layout = str(ov.keys_layout or "").strip().lower()
+    if layout not in KEY_LAYOUTS:
+        log.warning("overlay.keys_layout=%r is unknown, using %s", ov.keys_layout, DEFAULT_KEY_LAYOUT)
+        layout = DEFAULT_KEY_LAYOUT
+    ov.keys_layout = layout
 
 
 def clamp_recording_limits(cfg: Config) -> None:

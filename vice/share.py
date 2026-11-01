@@ -522,7 +522,8 @@ def _trimmed_copy_path(path: Path) -> Path:
     return candidate
 
 
-def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Optional[KeyBurn]:
+def _key_burn_for(project: dict, sources: dict, work: Path, accent: str,
+                  layout: str = "qwerty") -> Optional[KeyBurn]:
     """The keyboard panel for an export, or None when no clip in it has keys
     or the panel cannot be drawn here."""
     intervals = {}
@@ -535,7 +536,7 @@ def _key_burn_for(project: dict, sources: dict, work: Path, accent: str) -> Opti
     _, height, _ = canvas_for(project, sources)
     try:
         from .key_overlay import render_burn_assets
-        assets = render_burn_assets(work, accent, max(0.5, height / 1080))
+        assets = render_burn_assets(work, accent, max(0.5, height / 1080), layout)
     except Exception as exc:  # pycairo missing, or a drawing failure
         log.warning("Exporting without the keyboard panel: %s", exc)
         return None
@@ -1060,6 +1061,11 @@ class ShareServer:
         # clip's, and they can collide with one, so nothing may look an image
         # up in _clips or the other way round.
         self._images: dict[str, Path] = {}
+        # Slugs with a trim in flight. A trim can run for minutes when it has
+        # to re-encode, and a second one on the same clip would write the same
+        # .trimming file and read the original while the first replaces it,
+        # which leaves a corrupt clip (#281).
+        self._trimming: set[str] = set()
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
@@ -1865,6 +1871,22 @@ class ShareServer:
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
+        # No await between the check and the add, so two requests cannot both
+        # get past it. Refused rather than queued: the second cut was chosen
+        # against a file the first one is about to replace (#281).
+        if slug in self._trimming:
+            return web.json_response(
+                {"ok": False,
+                 "error": "A trim is already running on this clip. "
+                          "Wait for it to finish."},
+                status=409)
+        self._trimming.add(slug)
+        try:
+            return await self._trim_clip(req, slug, path)
+        finally:
+            self._trimming.discard(slug)
+
+    async def _trim_clip(self, req: web.Request, slug: str, path: Path) -> web.Response:
         body  = await req.json()
         start = float(body.get("start", 0))
         end   = float(body.get("end",   0))
@@ -2585,7 +2607,8 @@ class ShareServer:
         key_burn = None
         if body.get("keys"):
             key_burn = await asyncio.to_thread(
-                _key_burn_for, project, sources, work / "keys", accent)
+                _key_burn_for, project, sources, work / "keys", accent,
+                self.cfg.overlay.keys_layout)
         try:
             cmd = build_export_cmd(project, sources, tmp,
                                    accent=accent,
@@ -2631,8 +2654,14 @@ class ShareServer:
             return web.json_response({"ok": True})
         raise web.HTTPNotFound()
 
-    async def _api_uninstall(self, _: web.Request) -> web.Response:
+    def _require_same_origin(self, req: web.Request) -> None:
+        expected_origin = self.local_base_url()
+        if expected_origin is None or req.headers.get("Origin") != expected_origin:
+            raise web.HTTPForbidden(text="Request origin is not allowed")
+
+    async def _api_uninstall(self, req: web.Request) -> web.Response:
         """Launch a detached uninstall process, then exit the daemon cleanly."""
+        self._require_same_origin(req)
         import os
         import signal as _sig
         import subprocess as _sp
@@ -2888,8 +2917,9 @@ class ShareServer:
             found = None
         return web.json_response({"ok": True, "update": found})
 
-    async def _api_quit(self, _: web.Request) -> web.Response:
+    async def _api_quit(self, req: web.Request) -> web.Response:
         """Stop the daemon (browser-mode quit, native window uses pywebview API)."""
+        self._require_same_origin(req)
         import os, signal as _sig
         response = web.json_response({"ok": True})
         asyncio.get_event_loop().call_later(0.2, lambda: os.kill(os.getpid(), _sig.SIGTERM))

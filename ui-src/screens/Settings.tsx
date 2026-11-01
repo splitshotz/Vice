@@ -1087,6 +1087,25 @@ export function Settings() {
             />
           </Row>
 
+          <Row label={t('settings.keyOverlayLayout')} help={t('settings.keyOverlayLayoutHelp')}>
+            <Select
+              label={t('settings.keyOverlayLayout')}
+              value={draft.keyOverlayLayout}
+              onChange={keyOverlayLayout => {
+                update({keyOverlayLayout});
+                void persistNow(
+                  {overlay: {keys_layout: keyOverlayLayout}},
+                  () => undefined,
+                  t('settings.errSaveOverlay'),
+                );
+              }}
+              options={[
+                ['azerty', t('settings.overlayLayoutAzerty')],
+                ['qwerty', t('settings.overlayLayoutQwerty')],
+              ]}
+            />
+          </Row>
+
           <Row label={t('settings.keyOverlayKey')} help={t('settings.keyOverlayKeyHelp')}>
             <div className="key-pair">
               <KeyCapture

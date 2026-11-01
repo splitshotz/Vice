@@ -1309,7 +1309,7 @@ class ViceDaemon:
             self.key_ring = None
         place = {"position": ov.keys_position, "x": ov.keys_x, "y": ov.keys_y,
                  "scale": ov.keys_scale}
-        await self.key_overlay.sync(ov.keys, place, self.cfg.sharing.embed_color)
+        await self.key_overlay.sync(ov.keys, place, self.cfg.sharing.embed_color, ov.keys_layout)
 
     async def _toggle_key_overlay(self) -> None:
         self.cfg.overlay.keys = not self.cfg.overlay.keys

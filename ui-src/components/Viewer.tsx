@@ -137,6 +137,7 @@ export function Viewer(props: ViewerProps) {
   const failed = useVideoFailure(videoRef, mounted);
   const [keysShown, setKeysShown] = useState(storedKeysShown);
   const [keyIntervals, setKeyIntervals] = useState<KeyInterval[] | null>(null);
+  const [keyLayout, setKeyLayout] = useState<string>('qwerty');
 
   const index = clip ? clips.findIndex(c => c.slug === clip.slug) : -1;
   const open = props.clip !== null;
@@ -182,6 +183,12 @@ export function Viewer(props: ViewerProps) {
       .clipKeys(keysSlug)
       .then(keys => live && setKeyIntervals(keys ?? null))
       .catch(err => console.debug('Loading the clip keys failed', err));
+    // Which keyboard to label the keys for. Read each time a clip opens, so a
+    // change in Settings shows without a reload. QWERTY if it cannot be read.
+    void api
+      .getConfig()
+      .then(cfg => live && setKeyLayout(String(cfg.overlay?.keys_layout ?? 'qwerty')))
+      .catch(err => console.debug('Loading the key layout failed', err));
     return () => {
       live = false;
     };
@@ -664,7 +671,7 @@ export function Viewer(props: ViewerProps) {
             ) : null}
 
             {keyIntervals && keysShown && !failed ? (
-              <KeyOverlay video={videoRef} intervals={keyIntervals} />
+              <KeyOverlay video={videoRef} intervals={keyIntervals} layout={keyLayout} />
             ) : null}
 
             {failed ? (

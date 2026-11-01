@@ -162,6 +162,41 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         ws = await self.client.ws_connect(f"ws://127.0.0.1:{self.local_port}/ws")
         await ws.close()
 
+    async def test_uninstall_requires_same_origin(self) -> None:
+        local_base = self.server.local_base_url()
+        with mock.patch("subprocess.Popen") as launch, mock.patch("os.kill") as kill:
+            async with self.client.post(f"{local_base}/api/uninstall") as resp:
+                self.assertEqual(resp.status, 403)
+            async with self.client.post(
+                f"{local_base}/api/uninstall",
+                data={"request": "test"},
+                headers={"Origin": "http://attacker.example"},
+            ) as resp:
+                self.assertEqual(resp.status, 403)
+            launch.assert_not_called()
+            kill.assert_not_called()
+
+            async with self.client.post(
+                f"{local_base}/api/uninstall",
+                headers={"Origin": local_base},
+            ) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(await resp.json(), {"ok": True})
+            await asyncio.sleep(0.5)
+            launch.assert_called_once()
+            kill.assert_called_once()
+
+    async def test_quit_requires_same_origin(self) -> None:
+        local_base = self.server.local_base_url()
+        with mock.patch("os.kill") as kill:
+            async with self.client.post(
+                f"{local_base}/api/quit",
+                headers={"Origin": "http://attacker.example"},
+            ) as resp:
+                self.assertEqual(resp.status, 403)
+            await asyncio.sleep(0.3)
+            kill.assert_not_called()
+
     async def test_public_server_only_serves_share_routes(self) -> None:
         public_base = f"http://127.0.0.1:{self.public_port}"
         token = _share_token(self.server, "test_clip")
@@ -1176,6 +1211,70 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(self._duration(src), 2.0, delta=0.2)
             self.assertGreaterEqual(self._keyframe_count(src), 1)
 
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class TrimOverlapTests(unittest.IsolatedAsyncioTestCase):
+    """#281: a second trim started while the first was still running wrote the
+    same .trimming file and corrupted the clip."""
+
+    def _server(self, root: Path) -> "ShareServer":
+        cfg = Config()
+        cfg.output.directory = str(root)
+        server = ShareServer(cfg)
+        src = root / "Vice_Clip_1.mp4"
+        src.write_bytes(b"original")
+        server._clips["Vice_Clip_1"] = src
+        return server
+
+    def _req(self) -> mock.MagicMock:
+        req = mock.MagicMock()
+        req.match_info = {"slug": "Vice_Clip_1"}
+        req.json = mock.AsyncMock(return_value={"start": 1.0, "end": 3.0})
+        return req
+
+    async def test_a_second_trim_on_the_same_clip_is_refused_while_one_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            started = asyncio.Event()
+            release = asyncio.Event()
+            calls = []
+
+            async def slow_trim(req, slug, path):
+                calls.append(slug)
+                started.set()
+                await release.wait()
+                return mock.MagicMock(status=200)
+
+            with mock.patch.object(server, "_trim_clip", new=slow_trim):
+                first = asyncio.ensure_future(server._api_trim(self._req()))
+                await started.wait()
+
+                second = await server._api_trim(self._req())
+                self.assertEqual(second.status, 409)
+                self.assertFalse(json.loads(second.text)["ok"])
+                self.assertEqual(calls, ["Vice_Clip_1"], "the second trim must not start")
+
+                release.set()
+                await first
+
+    async def test_the_clip_can_be_trimmed_again_once_the_first_trim_ends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            ok = mock.MagicMock(status=200)
+            with mock.patch.object(server, "_trim_clip", new=mock.AsyncMock(return_value=ok)):
+                await server._api_trim(self._req())
+                self.assertNotIn("Vice_Clip_1", server._trimming)
+                await server._api_trim(self._req())
+
+    async def test_a_failed_trim_releases_the_clip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server = self._server(Path(tmp))
+            boom = mock.AsyncMock(side_effect=RuntimeError("ffmpeg died"))
+            with mock.patch.object(server, "_trim_clip", new=boom):
+                with self.assertRaises(RuntimeError):
+                    await server._api_trim(self._req())
+            self.assertNotIn("Vice_Clip_1", server._trimming)
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")

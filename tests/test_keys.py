@@ -179,6 +179,103 @@ class SidecarLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(keys.load_sidecar("Renamed"))
 
 
+class KeyLayoutTests(unittest.TestCase):
+    """AZERTY / QWERTY: same physical keys, different labels."""
+
+    @staticmethod
+    def _labels(rows):
+        return [[label for key, label, _ in row if key is not None] for row in rows]
+
+    def test_qwerty_is_the_layout_the_overlay_always_had(self):
+        self.assertEqual(keys.layout_rows("qwerty"), keys.LAYOUT)
+        self.assertEqual(keys.layout_rows(), keys.LAYOUT)
+        self.assertEqual(self._labels(keys.layout_rows("qwerty"))[1:3],
+                         [["Tab", "Q", "W", "E", "R"], ["Shift", "A", "S", "D", "F"]])
+
+    def test_azerty_relabels_the_same_keys_in_the_same_places(self):
+        azerty = keys.layout_rows("azerty")
+        self.assertEqual(self._labels(azerty), [
+            ["1", "2", "3", "4", "5"],
+            ["Tab", "A", "Z", "E", "R"],
+            ["Shift", "Q", "S", "D", "F"],
+            ["Ctrl", ""],
+        ])
+        # Ids and widths do not move, so saved keys and the burn-in assets
+        # stay valid whichever layout is shown.
+        strip = lambda rows: [[(k, w) for k, _, w in row] for row in rows]
+        self.assertEqual(strip(azerty), strip(keys.LAYOUT))
+
+    def test_pressing_the_physical_key_lights_the_azerty_label(self):
+        """KEY_W is the key AZERTY prints Z on: ZQSD is WASD."""
+        ring = keys.KeyRing(60)
+        self.assertEqual(ring.record("KEY_W", True, at=1.0), ("W", True))
+        label = {k: label for row in keys.layout_rows("azerty") for k, label, _ in row if k}
+        self.assertEqual([label[k] for k in "WASD"], ["Z", "Q", "S", "D"])
+
+    def test_an_unknown_layout_falls_back_to_qwerty(self):
+        for bad in (None, "", "dvorak", 3, "AZERTY "):
+            expected = "azerty" if str(bad).strip().lower() == "azerty" else "qwerty"
+            self.assertEqual(keys.normalize_key_layout(bad), expected)
+        self.assertEqual(keys.layout_rows("dvorak"), keys.LAYOUT)
+
+    def test_the_panel_is_the_same_size_on_either_layout(self):
+        try:
+            from vice import key_overlay
+        except ImportError:
+            self.skipTest("overlay module not importable")
+        by_layout = {name: list(key_overlay.key_rects(1.0, name)) for name in keys.KEY_LAYOUTS}
+        geometry = lambda rects: [(k, x, y, w, h) for k, _, x, y, w, h in rects]
+        self.assertEqual(geometry(by_layout["qwerty"]), geometry(by_layout["azerty"]))
+        self.assertEqual([l for _, l, *_ in by_layout["azerty"]][5:10], ["Tab", "A", "Z", "E", "R"])
+        # The default call is what the overlay drew before layouts existed.
+        self.assertEqual(list(key_overlay.key_rects(1.0)), by_layout["qwerty"])
+
+    def test_labels_match_the_web_ui(self):
+        """The viewer draws the panel from ui-src/lib/keyLayout.ts."""
+        import re
+        root = Path(__file__).resolve().parents[1]
+        ts = (root / "ui-src" / "lib" / "keyLayout.ts").read_text()
+        names = re.search(r"KEY_LAYOUTS = \[(.*?)\]", ts).group(1)
+        self.assertEqual(tuple(re.findall(r"'(\w+)'", names)), keys.KEY_LAYOUTS)
+        block = re.search(r"azerty: \{(.*?)\},\n", ts, re.S).group(1)
+        parsed = {k.strip("'"): v for k, v in re.findall(r"('?\w+'?): '(.*?)'(?=,|$)", block)}
+        self.assertEqual(parsed, keys._LAYOUT_LABELS["azerty"])
+
+
+class KeyLayoutConfigTests(unittest.TestCase):
+    def test_default_is_qwerty_so_nobody_sees_a_change(self):
+        from vice.config import Config
+        self.assertEqual(Config().overlay.keys_layout, "qwerty")
+
+    def test_normalize_overlay_repairs_a_bad_layout(self):
+        from vice.config import Config, normalize_overlay
+        cfg = Config()
+        for raw, expected in (("azerty", "azerty"), (" AZERTY", "azerty"), ("QWERTY", "qwerty"),
+                              ("bepo", "qwerty"), ("", "qwerty"), (None, "qwerty")):
+            cfg.overlay.keys_layout = raw
+            normalize_overlay(cfg)
+            self.assertEqual(cfg.overlay.keys_layout, expected, raw)
+
+    def test_the_choice_survives_a_restart(self):
+        """Saved to the config file and read back, as on the next launch."""
+        from vice import config as config_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            with mock.patch.object(config_mod, "CONFIG_PATH", path), \
+                 mock.patch.object(config_mod, "CONFIG_DIR", Path(tmp)):
+                cfg = config_mod.Config()
+                cfg.overlay.keys_layout = "azerty"
+                config_mod.save(cfg)
+                self.assertIn('keys_layout = "azerty"', path.read_text())
+                self.assertEqual(config_mod.load().overlay.keys_layout, "azerty")
+                # A config written before this setting existed still loads.
+                path.write_text("[overlay]\nkeys = true\n")
+                old = config_mod.load()
+                self.assertEqual((old.overlay.keys, old.overlay.keys_layout), (True, "qwerty"))
+                path.write_text('[overlay]\nkeys_layout = "nonsense"\n')
+                self.assertEqual(config_mod.load().overlay.keys_layout, "qwerty")
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg missing")
 class KeyBurnExportTests(unittest.TestCase):
     """The panel burned into an editor export lights each key while it was
@@ -310,6 +407,24 @@ class KeyOverlayHostTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(got[1], {"t": "place", **place})
         self.assertEqual(got[2], {"t": "key", "k": "W", "d": True})
         self.assertTrue(self.host.state()["running"])
+
+    async def test_a_chosen_layout_is_sent_at_start_and_when_it_changes(self):
+        place = {"position": "bottom-left"}
+        await self.host.sync(True, place, "#8ab9f3", "azerty")
+        await self._settle()
+        self.assertEqual([m for m in self._received() if m["t"] == "layout"],
+                         [{"t": "layout", "name": "azerty"}])
+        await self.host.sync(True, place, "#8ab9f3", "azerty")   # unchanged, not resent
+        await self.host.sync(True, place, "#8ab9f3", "qwerty")
+        await self.host.sync(True, place, "#8ab9f3", "nonsense")  # unknown means the default
+        await self._settle()
+        self.assertEqual([m["name"] for m in self._received() if m["t"] == "layout"],
+                         ["azerty", "qwerty"])
+
+    async def test_the_default_layout_adds_nothing_to_the_start_up_messages(self):
+        await self.host.sync(True, {"position": "bottom-left"}, "#8ab9f3")
+        await self._settle()
+        self.assertNotIn("layout", [m["t"] for m in self._received()])
 
     async def test_a_finished_drag_is_reported(self):
         await self.host.sync(True, {"position": "bottom-left"}, "")

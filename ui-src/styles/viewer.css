@@ -1068,6 +1068,89 @@ kbd {
   color: var(--color-error);
 }
 
+/* A trim is running (#281). The window stays usable to read and close, but
+   the selection is locked: the cut was chosen against a file that is about to
+   be replaced. The bar is indeterminate, because ffmpeg's progress is not sent
+   to the window; it shows work is going on, not how far along it is. */
+.trim-modal[data-busy] .trim-readout,
+.trim-modal[data-busy] .trim-timeline {
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity var(--duration-medium) var(--ease-standard);
+}
+
+.trim-status[data-busy] {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  color: var(--color-text-secondary);
+}
+
+.trim-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trim-spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-overlay);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: trim-spin 0.8s linear infinite;
+}
+
+.trim-progress {
+  position: relative;
+  display: block;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--color-overlay);
+}
+
+.trim-progress::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent) 40%,
+    var(--color-accent) 60%,
+    transparent
+  );
+  animation: trim-progress-slide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes trim-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes trim-progress-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trim-spinner {
+    animation-duration: 2.4s;
+  }
+
+  .trim-progress::after {
+    width: 100%;
+    background: var(--color-accent);
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
 /* ── saved keys (#209) ──────────────────────────────────────────── */
 
 /* The same panel the overlay draws on screen: a surface container with

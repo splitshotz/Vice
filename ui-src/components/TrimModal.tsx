@@ -29,6 +29,8 @@ const MIN_SELECTION = 0.5;
 export function TrimModal({
   clip,
   highlights,
+  busy,
+  onBusy,
   onClose,
   onSaved,
   notify,
@@ -39,6 +41,13 @@ export function TrimModal({
   clip: Clip | null;
   /** Shown on the timeline when they belong to this clip. */
   highlights: Highlight[];
+  /**
+   * True while a trim of this clip is running on the daemon. It lives in the
+   * parent because this window can be closed and reopened mid-trim, and a
+   * local flag would reset and let a second trim start on the same file (#281).
+   */
+  busy: boolean;
+  onBusy: (slug: string, busy: boolean) => void;
   onClose: () => void;
   onSaved: () => Promise<void> | void;
   notify: (title: string, detail?: string, tone?: 'accent' | 'error') => void;
@@ -54,7 +63,6 @@ export function TrimModal({
   const [previewing, setPreviewing] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState(false);
   // Held until the dialog closes. Renaming the file straight away swapped the
@@ -72,6 +80,10 @@ export function TrimModal({
   previewingRef.current = previewing;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  // The slug on screen now. A trim that ends after this window was closed, or
+  // reopened on another clip, must not close or mark that other window.
+  const slugRef = useRef<string | null>(null);
+  slugRef.current = clip?.slug ?? null;
 
   const close = () => {
     if (clip && pendingName && pendingName !== clipTitle(clip)) onRename(clip, pendingName);
@@ -88,7 +100,6 @@ export function TrimModal({
     setSelection({start: 0, end: 0});
     setPlayhead(0);
     setPreviewing(false);
-    setSaving(false);
     setError(null);
     setPreparing(clipNeedsProxy(clip));
     setPendingName(null);
@@ -174,25 +185,28 @@ export function TrimModal({
   };
 
   const save = async (copy: boolean) => {
+    if (busy) return;
+    const slug = clip.slug;
     if (previewing) stopPreview();
-    setSaving(true);
+    onBusy(slug, true);
     setError(null);
     setConfirmReplace(false);
     try {
-      const result = await api.trimClip(clip.slug, selection.start, selection.end, copy);
+      const result = await api.trimClip(slug, selection.start, selection.end, copy);
       const name = pendingName && pendingName !== clipTitle(clip) ? pendingName : null;
       setPendingName(null);
       // A name typed while saving a copy belongs to the copy: the original is
       // the clip being kept as it was.
       if (name) onRename(copy && result.slug ? {...clip, slug: result.slug} : clip, name);
       notify(copy ? t('trim.savedCopy') : t('trim.saved'), name ?? clipTitle(clip), 'accent');
-      onClose();
+      if (slugRef.current === slug) onClose();
       await onSaved();
     } catch (err) {
       const message = (err as Error).message || t('trim.failed');
-      setError(message);
+      if (slugRef.current === slug) setError(message);
       notify(t('trim.errTrim'), message, 'error');
-      setSaving(false);
+    } finally {
+      onBusy(slug, false);
     }
   };
 
@@ -204,6 +218,7 @@ export function TrimModal({
     <div className="scrim" onMouseDown={e => e.target === e.currentTarget && close()}>
       <div
         className="modal trim-modal"
+        data-busy={busy || undefined}
         role="dialog"
         aria-modal="true"
         aria-label={t('trim.trimAria', {name: clipTitle(clip)})}>
@@ -348,8 +363,22 @@ export function TrimModal({
             disabled={!total}>
             {previewing ? t('trim.stop') : t('trim.preview')}
           </button>
-          <span className="trim-status" data-warning={(!error && confirmReplace) || undefined}>
-            {error ?? (confirmReplace ? t('trim.replaceWarning') : t('trim.loopHelp'))}
+          <span
+            className="trim-status"
+            data-warning={(!error && confirmReplace) || undefined}
+            data-busy={busy || undefined}
+            aria-live="polite">
+            {busy ? (
+              <>
+                <span className="trim-status-row">
+                  <span className="trim-spinner" aria-hidden="true" />
+                  {t('trim.working')}
+                </span>
+                <span className="trim-progress" role="progressbar" aria-label={t('trim.working')} />
+              </>
+            ) : (
+              (error ?? (confirmReplace ? t('trim.replaceWarning') : t('trim.loopHelp')))
+            )}
           </span>
           <button type="button" className="btn btn-quiet btn-sm" onClick={close}>
             {t('common.cancel')}
@@ -359,15 +388,15 @@ export function TrimModal({
             className={confirmReplace ? 'btn btn-danger-solid btn-sm' : 'btn btn-quiet btn-sm'}
             onClick={() => (confirmReplace ? void save(false) : setConfirmReplace(true))}
             onBlur={() => setConfirmReplace(false)}
-            disabled={saving || !total}>
-            {confirmReplace ? t('trim.replaceConfirm') : t('trim.replaceOriginal')}
+            disabled={busy || !total}>
+            {busy ? t('trim.saving') : confirmReplace ? t('trim.replaceConfirm') : t('trim.replaceOriginal')}
           </button>
           <button
             type="button"
             className="btn btn-sm"
             onClick={() => void save(true)}
-            disabled={saving || !total}>
-            {saving ? t('trim.saving') : t('trim.saveCopy')}
+            disabled={busy || !total}>
+            {busy ? t('trim.saving') : t('trim.saveCopy')}
           </button>
         </div>
       </div>

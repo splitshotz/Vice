@@ -13,6 +13,7 @@
   wmctrl,
   cloudflared,
   kdotool,
+  xdg-utils,
   withQtWebEngine ? true,
   extraRuntimePaths ? [ ],
 }:
@@ -29,6 +30,8 @@ let
     wmctrl
     cloudflared
     kdotool
+    # replaces the service's PATH, so without this NixOS has no xdg-open (#283).
+    xdg-utils
   ] ++ extraRuntimePaths;
 in
 python3Packages.buildPythonApplication rec {

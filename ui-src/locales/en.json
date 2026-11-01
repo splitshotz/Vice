@@ -362,7 +362,8 @@
     "startOfSelection": "Start of the selection",
     "endOfSelection": "End of the selection",
     "trimAria": "Trim {name}",
-    "heading": "Trim"
+    "heading": "Trim",
+    "working": "Trimming. This can take a few minutes."
   },
   "images": {
     "heading": "Images",
@@ -711,6 +712,10 @@
     "overlayMove": "Move it",
     "overlayDoneMoving": "Done",
     "keyOverlaySize": "Overlay size",
+    "keyOverlayLayout": "Keyboard layout",
+    "keyOverlayLayoutHelp": "Labels the overlay's keys for your keyboard. AZERTY shows ZQSD where QWERTY shows WASD. The same physical keys light up either way.",
+    "overlayLayoutAzerty": "AZERTY",
+    "overlayLayoutQwerty": "QWERTY",
     "keyOverlayKey": "Overlay key",
     "keyOverlayKeyHelp": "Shows or hides the overlay without opening Vice.",
     "keyOverlayKeyNow": "{key} now shows and hides the overlay",

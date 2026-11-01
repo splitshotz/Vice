@@ -1,5 +1,6 @@
 import {formatLengthLong} from './format';
 import {t} from './i18n';
+import {normalizeKeyLayout} from './keyLayout';
 import type {Config} from './types';
 
 /**
@@ -51,6 +52,7 @@ export interface Draft {
   /** Percent. */
   keyOverlayScale: number;
   keyOverlayInClips: boolean;
+  keyOverlayLayout: string;
   clipPresets: ClipPreset[];
   hotkeyBlocklist: string;
 
@@ -166,6 +168,7 @@ export function draftFromConfig(config: Config): Draft {
     keyOverlayPosition: str(ov.keys_position, 'bottom-left'),
     keyOverlayScale: Math.round(num(ov.keys_scale, 1) * 100),
     keyOverlayInClips: Boolean(ov.keys_in_clips),
+    keyOverlayLayout: normalizeKeyLayout(ov.keys_layout),
     clipPresets: (Array.isArray(h.clip_presets) ? h.clip_presets : []).map(raw => {
       const preset = (raw ?? {}) as Record<string, unknown>;
       return {uid: nextUid(), key: str(preset.key, ''), duration: num(preset.duration, 60)};
@@ -281,6 +284,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       keys_position: draft.keyOverlayPosition,
       keys_scale: draft.keyOverlayScale / 100,
       keys_in_clips: draft.keyOverlayInClips,
+      keys_layout: draft.keyOverlayLayout,
     },
     updates: {check_on_start: draft.checkForUpdates},
     notifications: {

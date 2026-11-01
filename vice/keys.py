@@ -44,6 +44,33 @@ EVDEV_TO_KEY: dict[str, str] = {
 
 LAYOUT_KEYS = frozenset(EVDEV_TO_KEY.values())
 
+# Keyboard layouts the panel can be labelled for. Key ids, and so the keys
+# saved beside clips, name the physical key evdev reports (KEY_Q is the key
+# right of Tab on every keyboard), so a layout only changes what is printed
+# on a key, never which key lights up. LAYOUT above is the QWERTY one.
+KEY_LAYOUTS = ("qwerty", "azerty")
+DEFAULT_KEY_LAYOUT = "qwerty"
+
+# Labels that differ from LAYOUT's, by key id. On AZERTY the physical Q, W and
+# A keys print A, Z and Q. The number row keeps 1 to 5, the names games and
+# players use for those keys.
+_LAYOUT_LABELS: dict[str, dict[str, str]] = {
+    "azerty": {"Q": "A", "W": "Z", "A": "Q"},
+}
+
+
+def normalize_key_layout(name: object) -> str:
+    """*name* when it is a known layout, the default otherwise."""
+    value = str(name or "").strip().lower()
+    return value if value in KEY_LAYOUTS else DEFAULT_KEY_LAYOUT
+
+
+def layout_rows(name: object = DEFAULT_KEY_LAYOUT) -> list[list[tuple[Optional[str], str, float]]]:
+    """LAYOUT with the labels of layout *name*. Same keys, same widths."""
+    labels = _LAYOUT_LABELS.get(normalize_key_layout(name), {})
+    return [[(key, labels.get(key, label) if key is not None else label, span)
+             for key, label, span in row] for row in LAYOUT]
+
 
 class KeyRing:
     """Presses and releases of layout keys over the last *horizon* seconds,

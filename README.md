@@ -111,7 +111,7 @@ The AUR package and the script install everything Vice needs, including the `gpu
 
 **Clips the screen you're on.** Turn on Follow my mouse and Vice records whichever monitor the pointer is sitting on, instead of one you picked in advance. Works on X11, Hyprland and Sway.
 
-**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
+**Your keys on screen.** A keyboard overlay shows the keys you press over your game, for streams and clips, in your theme colour. Drag it anywhere or pick a corner, and label the keys for AZERTY or QWERTY in Settings, Overlay. Vice can also keep the keys with each clip to show in the viewer or burn into an editor export. Off until you turn it on; only the overlay's own keys are ever read. Needs X11, or a Wayland desktop with layer-shell (KDE Plasma, Hyprland, Sway, Niri).
 
 **Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
 
@@ -369,7 +369,7 @@ Vice is better because these people sent patches:
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
-- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the French translation, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront
+- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the AZERTY / QWERTY choice for the keyboard overlay, French translations, bug fixes, and contributions to GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront.
 - [@20plays](https://github.com/20plays), for system tray support, preserving working Arch installations during installer dependency checks, and selecting the distro Python for QtWebEngine
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 - [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module

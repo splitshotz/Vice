@@ -1,7 +1,7 @@
 import {useEffect, useRef, type RefObject} from 'react';
 
 import {t} from '../lib/i18n';
-import {KEY_LAYOUT, keysAt, type KeyInterval} from '../lib/keyLayout';
+import {keyLayoutRows, keysAt, type KeyInterval} from '../lib/keyLayout';
 
 /**
  * The keys kept beside a clip, drawn over the video in time with it (#209).
@@ -13,9 +13,12 @@ import {KEY_LAYOUT, keysAt, type KeyInterval} from '../lib/keyLayout';
 export function KeyOverlay({
   video,
   intervals,
+  layout,
 }: {
   video: RefObject<HTMLVideoElement | null>;
   intervals: KeyInterval[];
+  /** Which keyboard the labels are for, from Settings. QWERTY when unset. */
+  layout?: string;
 }) {
   const root = useRef<HTMLDivElement>(null);
 
@@ -39,7 +42,7 @@ export function KeyOverlay({
 
   return (
     <div className="key-overlay" ref={root} aria-label={t('viewer.keysAria')} role="img">
-      {KEY_LAYOUT.map((row, r) => (
+      {keyLayoutRows(layout).map((row, r) => (
         <div className="key-overlay-row" key={r}>
           {row.map(([id, label, span], k) =>
             id === null ? (
