@@ -762,6 +762,67 @@ export function Settings() {
               ]}
             />
           </Row>
+
+          <Row
+            label={t('settings.voiceClipping')}
+            note={
+              draft.voiceEnabled && status.voice?.error
+                ? {
+                    text: status.voice.error,
+                    tone: 'warning' as const,
+                  }
+                : null
+            }
+            help={t('settings.voiceClippingHelp')}>
+            <Toggle
+              label={t('settings.voiceClipping')}
+              checked={draft.voiceEnabled}
+              onChange={voiceEnabled => update({voiceEnabled})}
+            />
+          </Row>
+
+          {draft.voiceEnabled ? (
+            <>
+              <Row
+                label={t('settings.voiceCustomPhrase')}
+                help={t('settings.voiceCustomPhraseHelp')}>
+                <TextField
+                  label={t('settings.voiceCustomPhrase')}
+                  value={draft.voiceCustomPhrase}
+                  placeholder="Record that"
+                  onChange={voiceCustomPhrase => update({voiceCustomPhrase})}
+                />
+              </Row>
+
+              <Row
+                label={t('settings.voiceSensitivity')}
+                help={t('settings.voiceSensitivityHelp')}>
+                <Slider
+                  label={t('settings.voiceSensitivity')}
+                  value={draft.voiceSensitivity}
+                  min={20}
+                  max={80}
+                  step={5}
+                  onChange={voiceSensitivity => update({voiceSensitivity})}
+                  format={v => `${v}%`}
+                />
+              </Row>
+
+              <Row
+                label={t('settings.voiceCooldown')}
+                help={t('settings.voiceCooldownHelp')}>
+                <Slider
+                  label={t('settings.voiceCooldown')}
+                  value={draft.voiceCooldown}
+                  min={1}
+                  max={15}
+                  step={0.5}
+                  onChange={voiceCooldown => update({voiceCooldown})}
+                  format={v => `${v}s`}
+                />
+              </Row>
+            </>
+          ) : null}
         </Card>
 
         {/* ── Hotkeys ───────────────────────────────────────────── */}

@@ -34,9 +34,9 @@ def _libraries(root: Path, *paths: Path) -> None:
 
 class _SteamFolderTestCase(unittest.TestCase):
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = Path(tmp.name)
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.tmp = Path(self.tmpdir.name)
         self.home = self.tmp / "home"
         self.steam = self.home / ".local/share/Steam"
         self.steam.mkdir(parents=True)
