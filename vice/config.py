@@ -311,6 +311,20 @@ class OverlayConfig:
 
 
 @dataclass
+class VoiceConfig:
+    # Continuously listen on the microphone for "Vice, clip that" / "Clip that".
+    enabled: bool = False
+    # Optional custom trigger phrase in addition to the defaults (e.g. "Record that").
+    custom_phrase: str = ""
+    # Cooldown seconds after a voice trigger before another voice clip can fire.
+    cooldown: float = 4.0
+    # Minimum word confidence threshold (0.20 to 0.90, default 0.50).
+    min_confidence: float = 0.50
+    # Custom path to an unpacked Vosk speech model; empty means default lookup.
+    model_path: str = ""
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
@@ -321,6 +335,7 @@ class Config:
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
 def _merge(defaults: dict, overrides: dict) -> dict:
@@ -472,6 +487,23 @@ def normalize_overlay(cfg: "Config") -> None:
     ov.keys_in_clips = bool(ov.keys_in_clips)
 
 
+def normalize_voice(cfg: Config) -> None:
+    vc = getattr(cfg, "voice", None)
+    if not isinstance(vc, VoiceConfig):
+        return
+    vc.custom_phrase = str(getattr(vc, "custom_phrase", "") or "").strip()
+    try:
+        vc.cooldown = max(1.0, min(float(getattr(vc, "cooldown", 4.0)), 60.0))
+    except (TypeError, ValueError):
+        vc.cooldown = 4.0
+    try:
+        vc.min_confidence = max(0.20, min(float(getattr(vc, "min_confidence", 0.50)), 0.90))
+    except (TypeError, ValueError):
+        vc.min_confidence = 0.50
+    vc.model_path = str(getattr(vc, "model_path", "") or "").strip()
+    vc.enabled = bool(vc.enabled)
+
+
 def clamp_recording_limits(cfg: Config) -> None:
     """Keep durations inside supported bounds regardless of where the config
     came from (hand-edited TOML, old versions, the settings API)."""
@@ -607,10 +639,12 @@ def load() -> Config:
         ),
         ui=UIConfig(**_known_keys(UIConfig, merged.get("ui", {}))),
         overlay=OverlayConfig(**_known_keys(OverlayConfig, merged.get("overlay", {}))),
+        voice=VoiceConfig(**_known_keys(VoiceConfig, merged.get("voice", {}))),
     )
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)
     normalize_overlay(cfg)
+    normalize_voice(cfg)
     return cfg
 
 

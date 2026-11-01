@@ -103,6 +103,14 @@ export interface Status {
   disk?: {free: number; total: number} | null;
   update?: UpdateInfo | null;
   key_overlay?: KeyOverlayState | null;
+  voice?: VoiceState | null;
+}
+
+export interface VoiceState {
+  enabled: boolean;
+  active: boolean;
+  error: string | null;
+  phrases: string[];
 }
 
 /** The on-screen keyboard overlay's process, as the daemon sees it. */
@@ -138,6 +146,12 @@ export interface Config {
   notifications: Record<string, unknown>;
   ui: Record<string, unknown>;
   overlay?: Record<string, unknown>;
+  voice?: Record<string, unknown> & {
+    enabled?: boolean;
+    custom_phrase?: string;
+    cooldown?: number;
+    min_confidence?: number;
+  };
 }
 
 /** Every message the daemon broadcasts. */

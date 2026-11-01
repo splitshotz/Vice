@@ -152,9 +152,9 @@ class FiniteMediaLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 class ExportLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.root = Path(self.tmpdir.name)
         self.tmp = self.root / ".clip.export.mp4"
         self.final = self.root / "clip.mp4"
         self.cleanup = mock.Mock()

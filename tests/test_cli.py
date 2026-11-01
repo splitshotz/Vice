@@ -69,10 +69,10 @@ class CliVersionTests(unittest.TestCase):
 
 class StartCommandTests(unittest.TestCase):
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.socket_path = Path(tmp.name) / "vice.sock"
-        patcher = mock.patch("vice.main.PID_FILE", Path(tmp.name) / "vice.pid")
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.socket_path = Path(self.tmpdir.name) / "vice.sock"
+        patcher = mock.patch("vice.main.PID_FILE", Path(self.tmpdir.name) / "vice.pid")
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -144,10 +144,10 @@ class SessionWaitTests(unittest.TestCase):
     only ever right under systemd."""
 
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.socket_path = Path(tmp.name) / "vice.sock"
-        patcher = mock.patch("vice.main.PID_FILE", Path(tmp.name) / "vice.pid")
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.socket_path = Path(self.tmpdir.name) / "vice.sock"
+        patcher = mock.patch("vice.main.PID_FILE", Path(self.tmpdir.name) / "vice.pid")
         patcher.start()
         self.addCleanup(patcher.stop)
 

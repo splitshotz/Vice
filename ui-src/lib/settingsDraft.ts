@@ -42,6 +42,10 @@ export interface Draft {
   audioTracks: string[];
   mixFirstTrack: boolean;
   wfMicStrategy: string;
+  voiceEnabled: boolean;
+  voiceCustomPhrase: string;
+  voiceSensitivity: number;
+  voiceCooldown: number;
 
   clipKey: string;
   screenshotKey: string;
@@ -114,6 +118,7 @@ export function draftFromConfig(config: Config): Draft {
   const n = (config.notifications ?? {}) as Record<string, unknown>;
   const ui = (config.ui ?? {}) as Record<string, unknown>;
   const ov = (config.overlay ?? {}) as Record<string, unknown>;
+  const v = (config.voice ?? {}) as Record<string, unknown>;
 
   const resolution = str(r.resolution, '');
   const isPreset = RESOLUTION_PRESETS.some(([value]) => value === resolution);
@@ -156,6 +161,10 @@ export function draftFromConfig(config: Config): Draft {
     ),
     mixFirstTrack: Boolean(r.audio_tracks_mix_first),
     wfMicStrategy: str(r.wf_microphone_strategy, 'prompt'),
+    voiceEnabled: Boolean(v.enabled),
+    voiceCustomPhrase: str(v.custom_phrase, ''),
+    voiceSensitivity: typeof v.min_confidence === 'number' ? Math.round((1 - v.min_confidence) * 100) : 50,
+    voiceCooldown: typeof v.cooldown === 'number' ? v.cooldown : 4.0,
 
     clipKey: str(h.clip, 'KEY_F9'),
     // No default. An unset screenshot key means no screenshot key, and
@@ -295,6 +304,12 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       game_icons: draft.discordGameIcons,
       client_id_override: draft.discordClientId.trim() || null,
       custom_games: parseCustomGames(draft.discordCustomGames),
+    },
+    voice: {
+      enabled: draft.voiceEnabled,
+      custom_phrase: draft.voiceCustomPhrase.trim(),
+      cooldown: draft.voiceCooldown,
+      min_confidence: Math.max(0.2, Math.min(0.8, (100 - draft.voiceSensitivity) / 100)),
     },
   };
 }

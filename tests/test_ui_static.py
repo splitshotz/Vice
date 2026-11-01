@@ -763,6 +763,15 @@ class TranslationTests(unittest.TestCase):
         self.assertGreater(len(self.english_keys), 300)
         self.assertTrue((LOCALES / "index.ts").is_file())
 
+    def test_every_locale_file_is_imported_in_index(self) -> None:
+        index_ts = (LOCALES / "index.ts").read_text()
+        for path in LOCALES.glob("*.json"):
+            self.assertIn(
+                f"{path.stem}.json",
+                index_ts,
+                f"{path.name} exists in ui-src/locales/ but is not imported in index.ts",
+            )
+
     def test_no_locale_carries_a_key_english_has_dropped(self) -> None:
         # An extra key means English was renamed and this file was not, so the
         # string is dead weight and whatever replaced it is untranslated.
