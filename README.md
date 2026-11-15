@@ -221,6 +221,8 @@ Vice writes `~/.config/vice/config.toml` on first run. Everything below is also 
 [recording]
 buffer_duration = 120     # seconds kept in the rolling buffer
 clip_duration   = 20      # seconds saved per clip
+session_start_on_game_detect = false # automatically start sessions for detected games on KDE Wayland or X11
+session_stop_on_game_exit = false # stop sessions five seconds after the game active at session start exits
 fps             = 60
 display         = "DP-1"  # optional; omit to use the backend default display
 follow_mouse_display = false # record whichever monitor the pointer is on, ignoring `display`

@@ -19,6 +19,8 @@ import logging
 import os
 import re
 import subprocess
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -32,8 +34,31 @@ ActiveWindow = dict  # {"process": str, "class": str, "pid": int, "window_id": s
 # caller can pin capture without asking X11 for focus a second time.
 
 
+@dataclass
+class WindowScan:
+    """A successful background window scan, including a possibly empty set."""
+
+    windows: list[ActiveWindow]
+    focused_window_id: str | None
+
+
 # Compositor tools that only exist on the host, never inside the Flatpak.
 _HOST_TOOLS = frozenset({"hyprctl", "swaymsg", "niri", "kdotool"})
+
+_KDE_GAME_WINDOW_SCRIPT = """
+var windows = workspace.windowList().map(function (w) {
+    return {
+        window_id: w.internalId.toString(),
+        pid: w.pid,
+        class: w.resourceClass
+    };
+});
+var active = workspace.activeWindow;
+output_result(JSON.stringify({
+    windows: windows,
+    focused_window_id: active ? active.internalId.toString() : null
+}));
+""".strip()
 
 
 def _read_proc_comm(pid: int) -> str:
@@ -90,6 +115,26 @@ def _run(cmd: list[str], timeout: float = 1.0) -> str:
         return result.stdout
     except Exception:
         return ""
+
+
+def _run_scan_command(cmd: list[str], timeout: float = 3.0) -> str | None:
+    """Run one scanner command; None means failure, empty text is success."""
+    if cmd and cmd[0] in _HOST_TOOLS:
+        cmd = host_argv(cmd)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", exc)
+        return None
+    if result.returncode != 0:
+        log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", result.stderr)
+        return None
+    return result.stdout
 
 
 # ─── Hyprland ───────────────────────────────────────────────────────────────
@@ -187,13 +232,19 @@ def _active_window_geometry_niri() -> Optional[tuple[int, int]]:
 
 # ─── KDE Plasma / KWin ─────────────────────────────────────────────────────
 def _get_active_window_kde() -> Optional[ActiveWindow]:
-    pid_text = _run(["kdotool", "getactivewindow", "getwindowpid"]).strip()
+    window_id = _run(["kdotool", "getactivewindow"]).strip()
+    if not window_id:
+        if os.environ.get("DISPLAY"):
+            return _get_active_window_x11()
+        return None
+
+    pid_text = _run(["kdotool", "getwindowpid", window_id]).strip()
     try:
         pid = int(pid_text) if pid_text else 0
     except ValueError:
         pid = 0
 
-    cls = _run(["kdotool", "getactivewindow", "getwindowclassname"]).strip()
+    cls = _run(["kdotool", "getwindowclassname", window_id]).strip()
 
     proc = _read_proc_comm(pid) if pid else ""
     if not (cls or proc):
@@ -353,6 +404,201 @@ def list_candidate_windows() -> list[ActiveWindow]:
     except Exception as exc:
         log.debug("candidate window scan raised: %s", exc)
         return []
+
+
+def _canonical_x_window_id(raw: str) -> str | None:
+    try:
+        value = int(raw, 0)
+    except ValueError:
+        try:
+            value = int(raw, 10)
+        except ValueError:
+            return None
+    return f"0x{value:x}" if value >= 0 else None
+
+
+def _process_comm_for_pid(pid: int) -> str:
+    return _read_proc_comm(pid) if pid > 0 else ""
+
+
+def _parse_wmctrl_scan(raw: str) -> WindowScan | None:
+    windows: list[ActiveWindow] = []
+    for line in raw.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            return None
+        window_id = _canonical_x_window_id(parts[0])
+        if window_id is None:
+            return None
+        try:
+            pid = int(parts[2])
+        except ValueError:
+            return None
+        if pid < 0:
+            return None
+        cls = parts[3].split(".")[-1]
+        windows.append({
+            "process": _process_comm_for_pid(pid),
+            "class": cls,
+            "pid": pid,
+            "window_id": window_id,
+        })
+
+    focused_id = None
+    if shutil.which("xdotool"):
+        active = _run_scan_command(["xdotool", "getactivewindow"], timeout=1.5)
+        if active is not None:
+            focused_id = _canonical_x_window_id(active.strip())
+    return WindowScan(windows=windows, focused_window_id=focused_id)
+
+
+def _parse_wm_class(raw: str) -> str:
+    if "=" not in raw:
+        return ""
+    rhs = raw.split("=", 1)[1].strip()
+    parts = [part.strip().strip('"') for part in rhs.split(",")]
+    return (parts[-1] or parts[0]) if parts else ""
+
+
+def _scan_x11_game_windows() -> WindowScan | None:
+    if shutil.which("wmctrl"):
+        output = _run_scan_command(["wmctrl", "-lpx"], timeout=3.0)
+        if output is not None:
+            return _parse_wmctrl_scan(output)
+        log.debug("wmctrl scan failed; trying xdotool fallback")
+
+    if not (shutil.which("xdotool") and shutil.which("xprop")):
+        return None
+
+    output = _run_scan_command(["xdotool", "search", "--class", ".*"], timeout=4.0)
+    if output is None:
+        return None
+    raw_ids = output.split()
+    ids: list[tuple[str, str]] = []
+    for raw_id in raw_ids:
+        window_id = _canonical_x_window_id(raw_id)
+        if window_id is None:
+            return None
+        ids.append((raw_id, window_id))
+
+    windows: list[ActiveWindow] = []
+    for raw_id, window_id in ids:
+        pid_output = _run_scan_command(["xdotool", "getwindowpid", raw_id], timeout=1.5)
+        pid = 0
+        if pid_output is not None:
+            try:
+                pid = int(pid_output.strip() or "0")
+            except ValueError:
+                return None
+            if pid < 0:
+                return None
+
+        class_output = _run_scan_command(["xprop", "-id", raw_id, "WM_CLASS"], timeout=1.5)
+        if class_output is None:
+            return None
+        cls = _parse_wm_class(class_output)
+        proc = _process_comm_for_pid(pid)
+        if cls or proc:
+            windows.append({
+                "process": proc,
+                "class": cls,
+                "pid": pid,
+                "window_id": window_id,
+            })
+
+    if ids and not windows:
+        return None
+
+    focused_id = None
+    active = _run_scan_command(["xdotool", "getactivewindow"], timeout=1.5)
+    if active is not None:
+        focused_id = _canonical_x_window_id(active.strip())
+    return WindowScan(windows=windows, focused_window_id=focused_id)
+
+
+def _scan_kde_game_windows() -> WindowScan | None:
+    output = _run_scan_command(
+        ["kdotool", "kwinscript", "--inline", _KDE_GAME_WINDOW_SCRIPT],
+        timeout=5.0,
+    )
+    if output is None:
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("windows"), list):
+        return None
+    focused_id = payload.get("focused_window_id")
+    if focused_id is not None and not isinstance(focused_id, str):
+        return None
+
+    windows: list[ActiveWindow] = []
+    for row in payload["windows"]:
+        if not isinstance(row, dict):
+            return None
+        window_id = row.get("window_id")
+        if not isinstance(window_id, str) or not window_id:
+            return None
+        pid_value = row.get("pid")
+        if isinstance(pid_value, bool):
+            return None
+        if pid_value is None:
+            pid = 0
+        elif isinstance(pid_value, int):
+            pid = pid_value
+        else:
+            return None
+        if pid < 0:
+            return None
+        cls_value = row.get("class")
+        if cls_value is not None and not isinstance(cls_value, str):
+            return None
+        windows.append({
+            "process": _process_comm_for_pid(pid),
+            "class": cls_value or "",
+            "pid": pid,
+            "window_id": window_id,
+        })
+    return WindowScan(windows=windows, focused_window_id=focused_id)
+
+
+def _x11_scan_tools_available() -> bool:
+    return bool(shutil.which("wmctrl") or (
+        shutil.which("xdotool") and shutil.which("xprop")
+    ))
+
+
+def auto_start_scan_supported() -> bool:
+    """Whether this session has a background window enumeration adapter."""
+    adapter = _current_adapter()
+    if adapter is _get_active_window_kde:
+        return bool(host_which("kdotool") or (
+            os.environ.get("DISPLAY") and _x11_scan_tools_available()
+        ))
+    if adapter is _get_active_window_x11:
+        return _x11_scan_tools_available()
+    return False
+
+
+def scan_game_windows() -> WindowScan | None:
+    """Enumerate compositor windows without changing focus.
+
+    None means unsupported or failed; a successful scan with no windows has
+    an empty `windows` list. Captions are intentionally omitted.
+    """
+    adapter = _current_adapter()
+    if adapter is _get_active_window_kde:
+        if host_which("kdotool"):
+            scan = _scan_kde_game_windows()
+            if scan is not None:
+                return scan
+        if os.environ.get("DISPLAY"):
+            return _scan_x11_game_windows()
+        return None
+    if adapter is _get_active_window_x11:
+        return _scan_x11_game_windows()
+    return None
 
 
 # ─── pointer monitor ────────────────────────────────────────────────────────

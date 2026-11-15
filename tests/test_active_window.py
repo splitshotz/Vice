@@ -43,6 +43,30 @@ class ActiveWindowIdentityX11Tests(unittest.TestCase):
         })
 
 
+class ActiveWindowIdentityKDETests(unittest.TestCase):
+    def test_pid_and_class_are_read_from_one_stable_active_window_id(self) -> None:
+        commands = []
+
+        def run(command):
+            commands.append(command)
+            return {
+                ("kdotool", "getactivewindow"): "42\n",
+                ("kdotool", "getwindowpid", "42"): "1234\n",
+                ("kdotool", "getwindowclassname", "42"): "TestGame\n",
+            }.get(tuple(command), "")
+
+        with mock.patch("vice.active_window._run", side_effect=run), \
+             mock.patch("vice.active_window._read_proc_comm", return_value="testgame"):
+            win = active_window._get_active_window_kde()
+
+        self.assertEqual(win, {"process": "testgame", "class": "TestGame", "pid": 1234})
+        self.assertEqual(commands, [
+            ["kdotool", "getactivewindow"],
+            ["kdotool", "getwindowpid", "42"],
+            ["kdotool", "getwindowclassname", "42"],
+        ])
+
+
 class WindowGeometryByIdX11Tests(unittest.TestCase):
     def test_parses_width_and_height(self) -> None:
         out = "WIN=94\nX=10\nY=20\nWIDTH=1920\nHEIGHT=1080\nSCREEN=0\n"

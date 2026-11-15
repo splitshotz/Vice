@@ -13,6 +13,9 @@ import type {Config} from './types';
  * also reachable from Home and have to agree with it immediately.
  */
 export interface Draft {
+  sessionStartOnGameDetect: boolean;
+  sessionAutoStartExcludedProcesses: string;
+  sessionStopOnGameExit: boolean;
   bufferDuration: number;
   clipDuration: number;
   fps: string;
@@ -129,6 +132,11 @@ export function draftFromConfig(config: Config): Draft {
   const isPreset = RESOLUTION_PRESETS.some(([value]) => value === resolution);
 
   return {
+    sessionStartOnGameDetect: Boolean(r.session_start_on_game_detect),
+    sessionAutoStartExcludedProcesses: Array.isArray(r.session_auto_start_excluded_processes)
+      ? r.session_auto_start_excluded_processes.map(String).join('\n')
+      : '',
+    sessionStopOnGameExit: Boolean(r.session_stop_on_game_exit),
     bufferDuration: num(r.buffer_duration, 120),
     clipDuration: num(r.clip_duration, 20),
     fps: String(num(r.fps, 60)),
@@ -243,6 +251,9 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
   const resolution = resolvedResolution(draft);
   return {
     recording: {
+      session_start_on_game_detect: draft.sessionStartOnGameDetect,
+      session_auto_start_excluded_processes: splitLines(draft.sessionAutoStartExcludedProcesses),
+      session_stop_on_game_exit: draft.sessionStopOnGameExit,
       buffer_duration: requiredBuffer(draft),
       clip_duration: draft.clipDuration,
       fps: Number(draft.fps),

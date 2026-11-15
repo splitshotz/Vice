@@ -20,7 +20,7 @@ import asyncio
 import copy
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import os
 import re
 import shutil
@@ -37,6 +37,9 @@ import click
 
 from . import __version__
 from .active_window import steam_game_name
+from .session_process import ProcessIdentity, bind_game_process, probe_game_process
+from .active_window import scan_game_windows, auto_start_scan_supported
+from .session_auto_start import AutoStartStateError, SuppressionStore, read_host_boot_id
 from .config import (
     CLIP_DURATION_MIN,
     Config,
@@ -185,6 +188,16 @@ FOLLOW_MOUSE_INTERVAL = 2.0
 # just means the previous target keeps recording a bit longer, not a visible
 # glitch.
 WINDOW_CAPTURE_INTERVAL = 5.0
+SESSION_GAME_POLL_INTERVAL = 1.0
+SESSION_GAME_EXIT_DELAY = 5.0
+SESSION_AUTO_START_INTERVAL = 2.0
+
+
+@dataclass(frozen=True)
+class AutoStartTarget:
+    game: str
+    window: dict
+    identity: ProcessIdentity
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -207,10 +220,14 @@ class ViceDaemon:
         self._clip_count = 0
         # Session recording state
         self._session_lock = asyncio.Lock()
+        self._session_token: Optional[object] = None
+        self._session_monitor_task: Optional[asyncio.Task] = None
         self._session_game: Optional[str] = None
         self._session_active   = False
         self._session_path:    Optional[Path] = None
         self._session_highlights: list[dict] = []  # {time, label, color}
+        self._session_process_identity: Optional[ProcessIdentity] = None
+        self._init_auto_start()
         self._recording_sig = self._recording_signature()
         self._pending_recording_apply = False
         self._config_apply_lock = asyncio.Lock()
@@ -465,6 +482,7 @@ class ViceDaemon:
         loop.add_signal_handler(signal.SIGTERM, stop_event.set)
         loop.add_signal_handler(signal.SIGINT,  stop_event.set)
 
+        await self._sync_auto_start_task()
         await stop_event.wait()
         await self._shutdown(server)
 
@@ -493,6 +511,10 @@ class ViceDaemon:
         recorder, so moving one must not restart it and empty the buffer."""
         recording = asdict(self.cfg.recording)
         recording.pop("audio_track_volumes", None)
+        # Session controls do not change capture options.
+        recording.pop("session_stop_on_game_exit", None)
+        recording.pop("session_start_on_game_detect", None)
+        recording.pop("session_auto_start_excluded_processes", None)
         return json.dumps(recording, sort_keys=True)
 
     def _clips_in_library(self) -> int:
@@ -1105,6 +1127,7 @@ class ViceDaemon:
             if self.voice:
                 await self.voice.sync(self.cfg.voice, self.cfg.recording.microphone_source)
 
+            await self._sync_auto_start_task()
             if self.share:
                 await self.share.broadcast({
                     "type": "status",
@@ -1326,13 +1349,19 @@ class ViceDaemon:
             self._discord_game_comm = ""
 
     def _detect_game(self) -> Optional[str]:
-        """Recognized raw game name, independent of filename/playlist toggles.
+        """Recognized game label for existing replay/tagging callers."""
+        target = self._detect_game_target()
+        return target[0] if target else None
+
+    def _detect_game_target(self, *, focused_only: bool = False) -> Optional[tuple[str, dict]]:
+        """Recognized game and the matched window from the same detection.
 
         Sync (callers run it in a thread; window detection shells out to the
         compositor). Matches configured, bundled or Steam games, never
         arbitrary window titles.
 
         Shared by replays and sessions; callers own their captured identity.
+        focused_only excludes background matches when binding a manual session.
         """
         game = None
         win = None
@@ -1344,7 +1373,7 @@ class ViceDaemon:
             adapter = adapter_name()
             win = get_active_window()
             game = self._match_game(win) if win else None
-            if game is None:
+            if game is None and not focused_only:
                 # Focus detection is unreliable on KDE and GNOME under Wayland,
                 # where it goes through XWayland. Discord presence has fallen
                 # back to a visible-window scan since #102; without the same
@@ -1367,7 +1396,7 @@ class ViceDaemon:
             adapter, (win or {}).get("process"), (win or {}).get("class"),
             game, scanned, candidates,
         )
-        return game
+        return (game, win) if game is not None and win is not None else None
 
     def _clip_game_tag(self) -> Optional[str]:
         """Capture replay identity even when filename tagging is disabled."""
@@ -1500,6 +1529,7 @@ class ViceDaemon:
             "backend":          self.recorder.name,
             "clips":            self._clips_in_library(),
             "session_active":   self._session_active,
+            "session_auto_start_error": getattr(self, "_auto_start_error", None),
             "clip_key":         self.cfg.hotkeys.clip,
             "hotkeys_available": self.hotkeys_available,
             "disk":             self._disk_stats(),
@@ -1563,6 +1593,9 @@ class ViceDaemon:
 
     async def _shutdown(self, server) -> None:
         click.echo("\n[Vice] Shutting down…")
+        self._init_auto_start()
+        self._auto_start_shutdown = True
+        await self._stop_auto_start_task()
         try:
             await self.key_overlay.stop()
         except Exception:
@@ -1621,7 +1654,7 @@ class ViceDaemon:
         # There is no reason to restart capture for deferred settings on exit.
         self._pending_recording_apply = False
         try:
-            await self._stop_session()
+            await self._change_session(False, stop_reason="shutdown")
         except Exception:
             log.exception("Session stop failed during shutdown")
 
@@ -1775,6 +1808,228 @@ class ViceDaemon:
                     "error": self._clip_error_text(),
                 }))
 
+    # Automatic starts share the session lock, but never own session stops.
+    def _init_auto_start(self) -> None:
+        if hasattr(self, "_auto_start_task"):
+            return
+        self._auto_start_task: Optional[asyncio.Task] = None
+        self._auto_start_wake = asyncio.Event()
+        self._auto_start_shutdown = False
+        self._auto_start_error: Optional[str] = None
+        self._auto_start_state_blocked = False
+        self._auto_start_store: Optional[SuppressionStore] = None
+        self._auto_start_suppressed: set[ProcessIdentity] = set()
+        self._auto_start_attempts: dict[ProcessIdentity, tuple[int, float]] = {}
+        self._auto_start_pending: Optional[ProcessIdentity] = None
+
+    async def _set_auto_start_error(self, error: Optional[str]) -> None:
+        if error == "state":
+            self._auto_start_state_blocked = True
+        if self._auto_start_state_blocked and self.cfg.recording.session_start_on_game_detect:
+            error = "state"
+        if self._auto_start_error == error:
+            return
+        self._auto_start_error = error
+        if error:
+            log.warning("Automatic session starts paused: %s", error)
+        if self.share:
+            await self.share.broadcast({"type": "status", "session_auto_start_error": error})
+
+    async def _ensure_auto_start_store(self) -> bool:
+        if self._auto_start_state_blocked:
+            await self._set_auto_start_error("state")
+            return False
+        if self._auto_start_store is not None:
+            return True
+        try:
+            boot_id = await asyncio.to_thread(read_host_boot_id)
+            store = SuppressionStore(boot_id)
+            saved = await asyncio.to_thread(store.load)
+            self._auto_start_suppressed.update(saved)
+            self._auto_start_store = store
+            return not self._auto_start_state_blocked
+        except (AutoStartStateError, OSError):
+            log.exception("Cannot load automatic session suppression state")
+            await self._set_auto_start_error("state")
+            return False
+
+    async def _save_auto_start_suppression(self, identities: set[ProcessIdentity]) -> bool:
+        # Retain new manual stops in memory even if durable storage fails.
+        self._auto_start_suppressed = identities
+        try:
+            await asyncio.to_thread(self._auto_start_store.save, identities)
+            return True
+        except (AutoStartStateError, OSError):
+            log.exception("Cannot save automatic session suppression state")
+            await self._set_auto_start_error("state")
+            return False
+
+    def _scan_auto_start_targets(self) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity]]]:
+        scan = scan_game_windows()
+        if scan is None:
+            return None
+        excluded = {
+            name.casefold()
+            for name in getattr(
+                self.cfg.recording, "session_auto_start_excluded_processes", []
+            )
+            if isinstance(name, str) and name
+        }
+        targets = {}
+        focused = None
+        for win in scan.windows:
+            process = win.get("process")
+            if excluded and isinstance(process, str) and process.casefold() in excluded:
+                continue
+            game = self._match_game(win)
+            if not game:
+                continue
+            identity = bind_game_process(win)
+            if identity is None:
+                continue
+            targets.setdefault(identity, AutoStartTarget(game, win, identity))
+            if win.get("window_id") == scan.focused_window_id:
+                focused = identity
+        return list(targets.values()), focused
+
+    async def _suppress_manually_stopped_session(self) -> None:
+        if not (self.cfg.recording.session_start_on_game_detect or self._auto_start_store):
+            return
+        if not await self._ensure_auto_start_store():
+            return
+        identity = getattr(self, "_session_process_identity", None)
+        if identity is not None:
+            stopped = {identity}
+        else:
+            # A session begun before auto-start was enabled may have no binding.
+            # A failed scan cannot safely establish which instances to suppress.
+            try:
+                scan = await asyncio.to_thread(self._scan_auto_start_targets)
+            except Exception:
+                scan = None
+                log.exception("Cannot identify games during manual session stop")
+            if scan is None:
+                await self._set_auto_start_error("state")
+                return
+            stopped = {target.identity for target in scan[0]}
+        await self._save_auto_start_suppression(self._auto_start_suppressed | stopped)
+
+    async def _sync_auto_start_task(self) -> None:
+        self._init_auto_start()
+        if not self.cfg.recording.session_start_on_game_detect or self._auto_start_shutdown:
+            await self._stop_auto_start_task()
+            if not self._auto_start_shutdown:
+                await self._set_auto_start_error(None)
+            return
+        if self._auto_start_task is None or self._auto_start_task.done():
+            self._auto_start_wake.clear()
+            self._auto_start_pending = None
+            self._auto_start_task = asyncio.create_task(self._auto_start_loop())
+
+    async def _stop_auto_start_task(self) -> None:
+        task = self._auto_start_task
+        if task is not None and task is not asyncio.current_task():
+            self._auto_start_wake.set()
+            # Do not cancel a start which is already creating a capture child.
+            await task
+            self._auto_start_task = None
+        self._auto_start_pending = None
+
+    async def _auto_start_loop(self) -> None:
+        try:
+            while (self.cfg.recording.session_start_on_game_detect
+                   and not self._auto_start_shutdown):
+                try:
+                    await self._auto_start_tick()
+                except Exception:
+                    self._auto_start_pending = None
+                    log.exception("Automatic game detection failed")
+                    await self._set_auto_start_error("detection")
+                try:
+                    await asyncio.wait_for(self._auto_start_wake.wait(), SESSION_AUTO_START_INTERVAL)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            self._auto_start_pending = None
+
+    async def _auto_start_tick(self) -> None:
+        if not self.cfg.recording.session_start_on_game_detect or self._auto_start_shutdown:
+            self._auto_start_pending = None
+            return
+        if not await self._ensure_auto_start_store():
+            self._auto_start_pending = None
+            return
+        # A disappearing window is not process exit. Only the process probe
+        # may release suppression or attempt limits, including across scans.
+        tracked = self._auto_start_suppressed | self._auto_start_attempts.keys()
+        expired = set()
+        for identity in tracked:
+            if await asyncio.to_thread(probe_game_process, identity) == "exited":
+                expired.add(identity)
+        if expired:
+            async with self._session_lock:
+                for identity in expired:
+                    self._auto_start_attempts.pop(identity, None)
+                remaining = self._auto_start_suppressed - expired
+                if remaining != self._auto_start_suppressed:
+                    if not await self._save_auto_start_suppression(remaining):
+                        return
+        if self._session_active or not self._ready:
+            self._auto_start_pending = None
+            return
+        if self._auto_start_error == "state":
+            return
+        if not await asyncio.to_thread(auto_start_scan_supported):
+            self._auto_start_pending = None
+            await self._set_auto_start_error("unsupported")
+            return
+        scan = await asyncio.to_thread(self._scan_auto_start_targets)
+        if scan is None:
+            self._auto_start_pending = None
+            await self._set_auto_start_error("detection")
+            return
+        if self._auto_start_error == "state":
+            self._auto_start_pending = None
+            return
+        await self._set_auto_start_error(None)
+        targets, focused = scan
+        selected = targets[0] if len(targets) == 1 else next(
+            (target for target in targets if target.identity == focused), None)
+        identity = selected.identity if selected else None
+        previous = self._auto_start_pending
+        self._auto_start_pending = identity
+        if selected is not None and identity == previous:
+            await self._change_session(True, automatic_target=selected)
+
+    def _automatic_start_allowed(self, target: AutoStartTarget) -> bool:
+        attempts, retry_at = self._auto_start_attempts.get(target.identity, (0, 0.0))
+        return (self.cfg.recording.session_start_on_game_detect
+                and not self._auto_start_shutdown and self._ready
+                and not self._session_active and self._auto_start_error is None
+                and not self._auto_start_state_blocked
+                and target.identity not in self._auto_start_suppressed
+                and attempts < 3 and time.monotonic() >= retry_at)
+
+    async def _attempt_automatic_start_locked(self, target: AutoStartTarget) -> None:
+        attempts, _ = self._auto_start_attempts.get(target.identity, (0, 0.0))
+        try:
+            await self._start_session_locked(target)
+        except Exception:
+            log.exception("Automatic session recording failed to start")
+        if self._session_active:
+            # One successful automatic session per instance; never loop if its
+            # capture child subsequently exits unexpectedly.
+            self._auto_start_attempts[target.identity] = (3, float("inf"))
+            return
+        attempts += 1
+        delay = 5.0 if attempts == 1 else 15.0
+        self._auto_start_attempts[target.identity] = (attempts, time.monotonic() + delay)
+        if attempts == 3:
+            log.error("Automatic session start failed three times; waiting for game relaunch")
+            if self.share:
+                await self.share.broadcast({"type": "session_auto_start_failed"})
+
     async def _handle_session_toggle(self) -> None:
         await self._change_session(None)
 
@@ -1784,20 +2039,62 @@ class ViceDaemon:
     async def _stop_session(self) -> None:
         await self._change_session(False)
 
-    async def _change_session(self, start: Optional[bool]) -> None:
+    async def _change_session(
+        self, start: Optional[bool], *, expected_token: Optional[object] = None,
+        automatic_target: Optional[AutoStartTarget] = None, stop_reason: str = "manual",
+    ) -> None:
         # Serialize start/stop through finalization: a new session must not
         # replace the identity or highlights of one still being saved.
+        self._init_auto_start()
         async with self._session_lock:
+            if automatic_target is not None:
+                if not self._automatic_start_allowed(automatic_target):
+                    return
+                live = await asyncio.to_thread(probe_game_process, automatic_target.identity)
+                if live != "running" or not self._automatic_start_allowed(automatic_target):
+                    return
+                exclusions = getattr(
+                    self.cfg.recording, "session_auto_start_excluded_processes", []
+                )
+                if exclusions:
+                    from .active_window import _read_proc_comm
+
+                    process = await asyncio.to_thread(
+                        _read_proc_comm, automatic_target.identity.pid
+                    )
+                    # Confirm the PID still denotes the selected instance after
+                    # reading comm, then use the latest config in case it changed
+                    # while either host proc query was pending.
+                    live = await asyncio.to_thread(probe_game_process, automatic_target.identity)
+                    if live != "running" or not self._automatic_start_allowed(automatic_target):
+                        return
+                    exclusions = getattr(
+                        self.cfg.recording, "session_auto_start_excluded_processes", []
+                    )
+                    if exclusions:
+                        excluded = {name.casefold() for name in exclusions if isinstance(name, str)}
+                        if not process or process.casefold() in excluded:
+                            return
+            if expected_token is not None and expected_token is not self._session_token:
+                return
             if start is None:
                 start = not self._session_active
             try:
                 if start:
                     if not self._session_active:
-                        await self._start_session_locked()
+                        if automatic_target is None:
+                            await self._start_session_locked()
+                        else:
+                            await self._attempt_automatic_start_locked(automatic_target)
                 elif self._session_active:
+                    if stop_reason == "manual":
+                        await self._suppress_manually_stopped_session()
                     await self._stop_session_locked()
             finally:
                 if not self._session_active:
+                    self._session_token = None
+                    self._session_process_identity = None
+                    await self._cancel_session_monitor()
                     self._session_game = None
                     self._session_path = None
                     self._session_highlights = []
@@ -1810,32 +2107,108 @@ class ViceDaemon:
             except Exception as exc:
                 log.error("Deferred recording config apply failed: %s", exc)
 
-    async def _start_session_locked(self) -> None:
+    async def _start_session_locked(self, target: Optional[AutoStartTarget] = None) -> None:
         click.echo("[Vice] Starting session recording…", err=True)
         self._session_game = None
         self._session_highlights = []
+        auto_stop_enabled = self.cfg.recording.session_stop_on_game_exit
+        identity = None
         try:
-            self._session_game = await asyncio.to_thread(self._detect_game)
+            if target is not None:
+                self._session_game = target.game
+                identity = target.identity
+            elif auto_stop_enabled or self.cfg.recording.session_start_on_game_detect:
+                detected = await asyncio.to_thread(self._detect_game_target, focused_only=True)
+                if detected:
+                    self._session_game, win = detected
+                    identity = await asyncio.to_thread(bind_game_process, win)
+                else:
+                    # Background detection remains useful for tags, not binding.
+                    self._session_game = await asyncio.to_thread(self._detect_game)
+            else:
+                self._session_game = await asyncio.to_thread(self._detect_game)
         except Exception:
-            log.exception("Session game detection failed; recording without a game tag")
+            log.exception("Session game detection failed; automatic stopping unavailable")
         tag = self._session_game if self.cfg.output.tag_clips_with_game else None
         path = await self.recorder.start_session(tag=tag)
         if path is None:
             click.echo("[Vice] Session recording failed to start", err=True)
             return
         self._session_active = True
+        self._session_token = object()
+        self._session_process_identity = identity
         self._session_path   = path
+        auto_stop = "off" if not auto_stop_enabled else ("armed" if identity else "unavailable")
         audio.play_session_start(self.cfg.notifications.sound_volume,
                                  self.cfg.notifications.session_start_sound,
                                  self.cfg.notifications.sound_pack)
         click.echo(f"[Vice] Session recording started → {path}", err=True)
+        if auto_stop == "armed":
+            message = "Session will stop five seconds after the original game exits."
+        elif auto_stop == "unavailable":
+            message = "Automatic stopping is unavailable for this session. Stop it manually."
+        else:
+            message = "Automatic session stopping is off."
+        log.info(message)
+        click.echo(f"[Vice] {message}", err=True)
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({
                     "type": "session_start",
                     "path": str(path),
+                    "auto_stop": auto_stop,
+                    "origin": "automatic" if target is not None else "manual",
                 })
             )
+
+        if auto_stop_enabled and identity is not None:
+            self._session_monitor_task = asyncio.create_task(
+                self._monitor_session_game(self._session_token, identity)
+            )
+
+    async def _cancel_session_monitor(self) -> None:
+        task = getattr(self, "_session_monitor_task", None)
+        self._session_monitor_task = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _monitor_session_game(self, token: object, identity: ProcessIdentity) -> None:
+        exited_since = None
+        try:
+            while self._session_active and self._session_token is token:
+                await asyncio.sleep(SESSION_GAME_POLL_INTERVAL)
+                if self.recorder.session_capture_exited():
+                    reason = "Session capture process exited"
+                    break
+                try:
+                    state = await asyncio.to_thread(probe_game_process, identity)
+                except Exception:
+                    log.exception("Session game process probe failed")
+                    state = "unknown"
+                now = time.monotonic()
+                if state != "exited":
+                    exited_since = None
+                    continue
+                if exited_since is None:
+                    exited_since = now
+                if now - exited_since >= SESSION_GAME_EXIT_DELAY:
+                    reason = "Original session game exited"
+                    break
+            else:
+                return
+            log.info("%s; finalizing session", reason)
+            await self._change_session(False, expected_token=token, stop_reason="automatic")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Automatic session stop failed")
+        finally:
+            if getattr(self, "_session_monitor_task", None) is asyncio.current_task():
+                self._session_monitor_task = None
 
     async def _stop_session_locked(self) -> None:
         click.echo("[Vice] Stopping session recording…", err=True)

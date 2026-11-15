@@ -102,6 +102,8 @@ export interface Status {
   gsr?: {source: 'native' | 'flatpak' | null; flatpak: boolean} | null;
   /** Set when Game Capture cannot pin a window here: GSR only does it on X11. */
   window_capture_unavailable?: 'wayland' | null;
+  /** Why automatic session start is unavailable in the current session. */
+  session_auto_start_error?: 'unsupported' | 'detection' | 'state' | null;
   codec_fallback: boolean;
   /** Where clips land. Absent when the drive could not be measured. */
   disk?: {free: number; total: number} | null;
@@ -195,7 +197,8 @@ export type WsMessage =
   | {type: 'tunnel_url'; url: string}
   | {type: 'tunnel_error'; error?: string}
   | {type: 'share_links_changed'; links: Record<string, string>; share_is_public: boolean}
-  | {type: 'session_start'}
+  | {type: 'session_start'; origin?: 'manual' | 'automatic'; auto_stop?: 'off' | 'armed' | 'unavailable'}
+  | {type: 'session_auto_start_failed'}
   | {type: 'session_stop'}
   | {type: 'session_highlight'; time?: number}
   | {type: 'export_progress'; [key: string]: unknown}

@@ -1797,6 +1797,10 @@ class Recorder(ABC):
             return 0.0
         return time.time() - self._session_start
 
+    def session_capture_exited(self) -> bool:
+        """Whether the current session's capture child has already exited."""
+        return self._session_proc is not None and self._session_proc.returncode is not None
+
     async def start_session(self, tag: Optional[str] = None) -> Optional[Path]:
         """
         Begin a continuous session recording directly to a file.

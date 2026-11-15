@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from vice import editor, keys, playlists, updates
+from vice import editor, keys, playlists, updates, session_auto_start
 
 try:
     from vice import share
@@ -24,6 +24,7 @@ ROOT = Path(tempfile.mkdtemp(prefix="vice-tests-"))
 atexit.register(shutil.rmtree, ROOT, ignore_errors=True)
 
 REDIRECTS = {
+    (session_auto_start, "STATE_PATH"): ROOT / "session_auto_start.json",
     (playlists, "PLAYLISTS_PATH"): ROOT / "playlists.json",
     (editor, "PROJECT_PATH"): ROOT / "editor_project.json",
     (keys, "KEYS_DIR"): ROOT / "keys",

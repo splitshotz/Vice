@@ -82,6 +82,13 @@ def normalize_combo(combo: str) -> str:
 
 @dataclass
 class RecordingConfig:
+    # Start a session when a supported game is detected in the foreground.
+    session_start_on_game_detect: bool = False
+    # Exact Linux process comm names that automatic session start ignores.
+    session_auto_start_excluded_processes: list[str] = field(default_factory=list)
+    # Stop a session five seconds after the game process active at session
+    # start exits. Disabled by default to preserve manual session control.
+    session_stop_on_game_exit: bool = False
     # How many seconds to keep in the rolling buffer.
     buffer_duration: int = 120
     # How many seconds to save when you hit the clip hotkey.
@@ -426,6 +433,21 @@ def normalize_focus_blocklist(raw) -> list[str]:
     return out
 
 
+def normalize_session_auto_start_exclusions(raw) -> list[str]:
+    """Trim process comm exclusions and deduplicate without changing spelling."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        value = str(item or "").strip()
+        key = value.casefold()
+        if value and key not in seen:
+            out.append(value)
+            seen.add(key)
+    return out
+
+
 def validate_hotkeys(hotkeys: HotkeyConfig) -> None:
     seen: set[str] = set()
     primary = normalize_combo((hotkeys.clip or "").strip())
@@ -654,9 +676,15 @@ def load() -> Config:
     hotkeys_raw["disable_while_focused"] = normalize_focus_blocklist(
         hotkeys_raw.get("disable_while_focused")
     )
+    recording_raw = dict(merged.get("recording", {}))
+    recording_raw["session_auto_start_excluded_processes"] = (
+        normalize_session_auto_start_exclusions(
+            recording_raw.get("session_auto_start_excluded_processes")
+        )
+    )
 
     cfg = Config(
-        recording=RecordingConfig(**_known_keys(RecordingConfig, merged.get("recording", {}))),
+        recording=RecordingConfig(**_known_keys(RecordingConfig, recording_raw)),
         hotkeys=HotkeyConfig(**_known_keys(HotkeyConfig, hotkeys_raw)),
         output=OutputConfig(**_known_keys(OutputConfig, output)),
         sharing=SharingConfig(**_known_keys(SharingConfig, merged.get("sharing", {}))),
