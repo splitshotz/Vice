@@ -401,6 +401,18 @@ export function Settings() {
           </Row>
 
           <Row
+            label={t('settings.sessionAutoStartExcludedProcesses')}
+            help={t('settings.sessionAutoStartExcludedProcessesHelp')}
+            stack>
+            <TextArea
+              label={t('settings.sessionAutoStartExcludedProcesses')}
+              value={draft.sessionAutoStartExcludedProcesses}
+              placeholder={t('settings.sessionAutoStartExcludedProcessesPlaceholder')}
+              onChange={sessionAutoStartExcludedProcesses => update({sessionAutoStartExcludedProcesses})}
+            />
+          </Row>
+
+          <Row
             label={t('settings.sessionStopOnGameExit')}
             help={t('settings.sessionStopOnGameExitHelp')}>
             <Toggle

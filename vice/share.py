@@ -2937,6 +2937,7 @@ class ShareServer:
             normalize_overlay,
             normalize_voice,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
+            normalize_session_auto_start_exclusions,
             validate_hotkeys,
             load as load_cfg, save as save_cfg,
         )
@@ -2988,10 +2989,16 @@ class ShareServer:
         hotkeys_raw["disable_while_focused"] = normalize_focus_blocklist(
             hotkeys_raw.get("disable_while_focused")
         )
+        recording_raw = dict(merged.get("recording", {}))
+        recording_raw["session_auto_start_excluded_processes"] = (
+            normalize_session_auto_start_exclusions(
+                recording_raw.get("session_auto_start_excluded_processes")
+            )
+        )
 
         new_cfg = Config(
             recording=RecordingConfig(**{
-                k: v for k, v in merged["recording"].items()
+                k: v for k, v in recording_raw.items()
                 if k in RecordingConfig.__dataclass_fields__
             }),
             hotkeys=HotkeyConfig(**{

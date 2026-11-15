@@ -511,9 +511,10 @@ class ViceDaemon:
         recorder, so moving one must not restart it and empty the buffer."""
         recording = asdict(self.cfg.recording)
         recording.pop("audio_track_volumes", None)
-        # Session lifecycle settings are captured at start, not capture options.
+        # Session controls do not change capture options.
         recording.pop("session_stop_on_game_exit", None)
         recording.pop("session_start_on_game_detect", None)
+        recording.pop("session_auto_start_excluded_processes", None)
         return json.dumps(recording, sort_keys=True)
 
     def _clips_in_library(self) -> int:
@@ -1867,9 +1868,19 @@ class ViceDaemon:
         scan = scan_game_windows()
         if scan is None:
             return None
+        excluded = {
+            name.casefold()
+            for name in getattr(
+                self.cfg.recording, "session_auto_start_excluded_processes", []
+            )
+            if isinstance(name, str) and name
+        }
         targets = {}
         focused = None
         for win in scan.windows:
+            process = win.get("process")
+            if excluded and isinstance(process, str) and process.casefold() in excluded:
+                continue
             game = self._match_game(win)
             if not game:
                 continue
@@ -2042,6 +2053,28 @@ class ViceDaemon:
                 live = await asyncio.to_thread(probe_game_process, automatic_target.identity)
                 if live != "running" or not self._automatic_start_allowed(automatic_target):
                     return
+                exclusions = getattr(
+                    self.cfg.recording, "session_auto_start_excluded_processes", []
+                )
+                if exclusions:
+                    from .active_window import _read_proc_comm
+
+                    process = await asyncio.to_thread(
+                        _read_proc_comm, automatic_target.identity.pid
+                    )
+                    # Confirm the PID still denotes the selected instance after
+                    # reading comm, then use the latest config in case it changed
+                    # while either host proc query was pending.
+                    live = await asyncio.to_thread(probe_game_process, automatic_target.identity)
+                    if live != "running" or not self._automatic_start_allowed(automatic_target):
+                        return
+                    exclusions = getattr(
+                        self.cfg.recording, "session_auto_start_excluded_processes", []
+                    )
+                    if exclusions:
+                        excluded = {name.casefold() for name in exclusions if isinstance(name, str)}
+                        if not process or process.casefold() in excluded:
+                            return
             if expected_token is not None and expected_token is not self._session_token:
                 return
             if start is None:

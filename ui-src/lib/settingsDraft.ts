@@ -14,6 +14,7 @@ import type {Config} from './types';
  */
 export interface Draft {
   sessionStartOnGameDetect: boolean;
+  sessionAutoStartExcludedProcesses: string;
   sessionStopOnGameExit: boolean;
   bufferDuration: number;
   clipDuration: number;
@@ -132,6 +133,9 @@ export function draftFromConfig(config: Config): Draft {
 
   return {
     sessionStartOnGameDetect: Boolean(r.session_start_on_game_detect),
+    sessionAutoStartExcludedProcesses: Array.isArray(r.session_auto_start_excluded_processes)
+      ? r.session_auto_start_excluded_processes.map(String).join('\n')
+      : '',
     sessionStopOnGameExit: Boolean(r.session_stop_on_game_exit),
     bufferDuration: num(r.buffer_duration, 120),
     clipDuration: num(r.clip_duration, 20),
@@ -248,6 +252,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
   return {
     recording: {
       session_start_on_game_detect: draft.sessionStartOnGameDetect,
+      session_auto_start_excluded_processes: splitLines(draft.sessionAutoStartExcludedProcesses),
       session_stop_on_game_exit: draft.sessionStopOnGameExit,
       buffer_duration: requiredBuffer(draft),
       clip_duration: draft.clipDuration,

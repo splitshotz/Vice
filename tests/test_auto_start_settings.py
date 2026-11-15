@@ -30,6 +30,25 @@ class AutoStartConfigTests(unittest.TestCase):
                     loaded = config_mod.load()
         self.assertTrue(loaded.recording.session_start_on_game_detect)
 
+    def test_excluded_process_names_default_and_persist_normalized(self) -> None:
+        self.assertEqual(Config().recording.session_auto_start_excluded_processes, [])
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / ".config" / "vice"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "config.toml"
+            with mock.patch.object(config_mod, "CONFIG_DIR", config_dir):
+                with mock.patch.object(config_mod, "CONFIG_PATH", config_path):
+                    config_mod.save(Config(recording=RecordingConfig(
+                        session_auto_start_excluded_processes=[
+                            "  GameClient.exe  ", "gameclient.EXE", "", " Helper ", "helper",
+                        ],
+                    )))
+                    loaded = config_mod.load()
+        self.assertEqual(
+            loaded.recording.session_auto_start_excluded_processes,
+            ["GameClient.exe", "Helper"],
+        )
+
 
 class AutoStartUiTests(unittest.TestCase):
     def test_setting_round_trip_and_recording_toggle_are_wired(self) -> None:
@@ -45,16 +64,29 @@ const code = result[0].output.find(item => item.type === 'chunk').code;
 const {draftFromConfig, patchFromDraft} = await import(
   'data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 assert.equal(draftFromConfig({}).sessionStartOnGameDetect, false);
+assert.equal(draftFromConfig({}).sessionAutoStartExcludedProcesses, '');
 for (const enabled of [false, true]) {
   for (const stopping of [false, true]) {
     const draft = draftFromConfig({recording: {
       session_start_on_game_detect: enabled, session_stop_on_game_exit: stopping,
+      session_auto_start_excluded_processes: ['GameClient.exe', 'Helper'],
     }});
     assert.equal(draft.sessionStartOnGameDetect, enabled);
+    assert.equal(draft.sessionAutoStartExcludedProcesses, 'GameClient.exe\\nHelper');
     assert.equal(patchFromDraft(draft).recording.session_start_on_game_detect, enabled);
     assert.equal(patchFromDraft(draft).recording.session_stop_on_game_exit, stopping);
+    assert.deepEqual(
+      patchFromDraft(draft).recording.session_auto_start_excluded_processes,
+      ['GameClient.exe', 'Helper'],
+    );
     draft.sessionStartOnGameDetect = !enabled;
+    draft.sessionAutoStartExcludedProcesses = '  Foo  \\n\\nBar \\n';
     assert.equal(patchFromDraft(draft).recording.session_start_on_game_detect, !enabled);
+    assert.deepEqual(
+      patchFromDraft(draft).recording.session_auto_start_excluded_processes,
+      ['Foo', 'Bar'],
+    );
+    assert.equal(patchFromDraft(draft).recording.session_stop_on_game_exit, stopping);
   }
 }
 """
