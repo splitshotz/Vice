@@ -512,7 +512,7 @@ class ViceDaemon:
         if self.share:
             # Session clips are added to the share server inside _stop_session;
             # only add here for regular replay-buffer clips (not sessions).
-            if not path.name.startswith("Vice_Session_"):
+            if path != getattr(self, "_session_path", None):
                 url = self.share.add_clip(path, game=self._last_clip_game)
                 self._last_clip_game = None
                 click.echo(f"[Vice] Share URL:  {url}\n")
