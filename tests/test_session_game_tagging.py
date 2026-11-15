@@ -5,6 +5,7 @@ import json
 import signal
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -18,7 +19,7 @@ from vice.main import ViceDaemon
 from vice.playlists import PlaylistStore, build_tag_index
 from vice.recorder import (
     Recorder, GSRRecorder, SegmentRecorder, _next_session_path, filename_tag,
-    _spawn_capture, _terminate_group,
+    _spawn_capture, _terminate_group, _next_clip_path,
 )
 from vice.share import ShareServer
 
@@ -96,6 +97,22 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    async def test_session_uses_configured_clip_template(self) -> None:
+        self.daemon.cfg.output.clip_name_template = "  recording_$n_$game  "
+        await self.daemon._start_session()
+        self.assertEqual(
+            self.daemon._session_path.name, "recording_1_Counter-Strike-2.mp4"
+        )
+        with mock.patch.object(
+            self.daemon.share, "add_clip", wraps=self.daemon.share.add_clip,
+        ) as add:
+            await self.daemon._stop_session()
+        add.assert_called_once_with(
+            self.root / "recording_1_Counter-Strike-2.mp4",
+            game="Counter-Strike 2", session=True,
+        )
+        self.assertEqual(self.daemon._last_clip_game, "Earlier replay")
 
     def assert_cleared(self) -> None:
         self.assertFalse(self.daemon._session_active)
@@ -692,3 +709,58 @@ class SessionGameTaggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reloaded.game_for("Vice_Session_1_Deep-Rock-Galactic"), "Deep Rock Galactic")
         self.assertEqual(reloaded.game_for("Vice_Session_2_Counter-Strike-2"), "Counter-Strike 2")
         self.assertIsNone(reloaded.game_for("Vice_Session_3"))
+
+
+class SessionNameTemplateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+    def test_all_tokens_and_sanitized_game(self) -> None:
+        with mock.patch("vice.recorder.datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 15, 9, 5)
+            path = _next_session_path(
+                self.root, "mkv", "Deep Rock Galactic",
+                template="recording_$n_$date_$time_$game",
+            )
+        self.assertEqual(
+            path.name, "recording_1_2026-11-15_0905_Deep-Rock-Galactic.mkv"
+        )
+
+    def test_clips_and_sessions_share_numbering_across_containers(self) -> None:
+        template = "recording_$n"
+        clip = _next_clip_path(self.root, template=template)
+        clip.touch()
+        session = _next_session_path(self.root, "mkv", template=template)
+        self.assertEqual(session.name, "recording_2.mkv")
+        session.touch()
+        self.assertEqual(
+            _next_clip_path(self.root, template=template).name, "recording_3.mp4"
+        )
+
+    def test_collision_keeps_existing_file(self) -> None:
+        existing = _next_clip_path(self.root, template="recording")
+        existing.write_bytes(b"original")
+        path = _next_session_path(self.root, template="recording")
+        self.assertEqual(path.name, "recording_2.mp4")
+        self.assertFalse(path.exists())
+        self.assertEqual(existing.read_bytes(), b"original")
+
+    def test_empty_and_unusable_templates_keep_session_default(self) -> None:
+        (self.root / "Vice_Session_4.mkv").touch()
+        for template in ("", "   ", "$game", "/\\"):
+            with self.subTest(template=template):
+                self.assertEqual(
+                    _next_session_path(self.root, template=template).name,
+                    "Vice_Session_5.mp4",
+                )
+        self.assertEqual(
+            _next_session_path(self.root, tag="Deep Rock Galactic").name,
+            "Vice_Session_5_Deep-Rock-Galactic.mp4",
+        )
+
+    def test_template_cannot_escape_output_directory(self) -> None:
+        path = _next_session_path(self.root, template="../../recording_$n")
+        self.assertEqual(path.parent, self.root)
+        self.assertEqual(path.name, "recording_1.mp4")

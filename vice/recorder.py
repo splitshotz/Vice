@@ -1810,7 +1810,10 @@ class Recorder(ABC):
 
         out_dir = resolve_path(self.cfg.output.directory)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = _next_session_path(out_dir, _container(self.cfg.recording), tag)
+        out_path = _next_session_path(
+            out_dir, _container(self.cfg.recording), tag,
+            template=self._clip_name_template(),
+        )
 
         cmd = self._build_session_cmd(out_path)
         if cmd is None:
@@ -2168,9 +2171,19 @@ def _next_clip_path(
 
 def _next_session_path(
     out_dir: Path, ext: str = "mp4", tag: Optional[str] = None,
+    template: str = "",
 ) -> Path:
-    """Return the next available Vice_Session_N[_Game].<ext> path."""
-    return _next_numbered_path(out_dir, "Vice_Session", ext, filename_tag(tag))
+    """Use the shared filename template, or Vice_Session_N[_Game].<ext>."""
+    tag = filename_tag(tag)
+    if template:
+        path = _next_templated_path(out_dir, template, ext, tag, datetime.now())
+        if path is not None:
+            return path
+        log.warning(
+            "Session name template %r produced no usable filename, using default naming",
+            template,
+        )
+    return _next_numbered_path(out_dir, "Vice_Session", ext, tag)
 
 
 def next_image_path(out_dir: Path, tag: Optional[str] = None, ext: str = "png") -> Path:

@@ -209,9 +209,9 @@ class OutputConfig:
     # Auto-file each clip into a per-game playlist when a known game is focused.
     # Independent of filename tagging; uses the same detection.
     auto_playlist_by_game: bool = True
-    # Override the Vice_Clip_N[_Game] clip filename. Supports $n, $date, $time
-    # and $game; empty keeps the default naming. Session recordings are
-    # unaffected. e.g. "clip_$date_$time" -> clip_2026-07-19_1600.mp4
+    # Override clip and session filenames. Supports $n, $date, $time and $game;
+    # empty keeps their respective Vice_Clip_N and Vice_Session_N defaults.
+    # e.g. "clip_$date_$time" -> clip_2026-07-19_1600.mp4
     clip_name_template: str = ""
 
 
