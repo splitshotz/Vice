@@ -25,6 +25,7 @@
   <url type="vcs-browser">https://github.com/splitshotz/Vice</url>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.19.0" date="2026-11-17"/>
     <release version="2.18.0" date="2026-11-11"/>
     <release version="2.17.0" date="2026-11-08"/>
     <release version="2.16.0" date="2026-11-08"/>

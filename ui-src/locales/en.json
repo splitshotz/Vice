@@ -991,6 +991,20 @@
     "title": "What's new in Vice {version}",
     "close": "Got it",
     "thanks": "Thanks to {names} for their work on this release.",
+    "v2_19_0": {
+      "voiceLength": {
+        "title": "Say how long",
+        "body": "\"Vice, clip last 30 seconds\" saves that length."
+      },
+      "discordSize": {
+        "title": "Discord copies for Nitro",
+        "body": "Pick 50 or 500 MB under Settings, Sharing."
+      },
+      "newLink": {
+        "title": "Take a link back",
+        "body": "New link in the share sheet stops the old one working."
+      }
+    },
     "v2_18_0": {
       "soundPacks": {
         "title": "New sounds",
