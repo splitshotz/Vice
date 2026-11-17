@@ -518,20 +518,21 @@ class DiscordTooLarge(Exception):
     """No bitrate fits this clip under the cap at a watchable quality."""
 
 
-def discord_bitrates(duration: float, audio_streams: int = 1) -> tuple[int, int]:
-    """(video kbps, per-track audio kbps) that fit DISCORD_MAX_MB.
+def discord_bitrates(duration: float, audio_streams: int = 1,
+                     max_mb: int = DISCORD_MAX_MB) -> tuple[int, int]:
+    """(video kbps, per-track audio kbps) that fit *max_mb*.
 
     Raises DiscordTooLarge when audio plus the video floor already overruns
     the cap. Clamping to the floor and encoding anyway produced files far
     over it: 1800s with one audio track budgets 62 MB at the floor.
     """
     audio_kbps = DISCORD_AUDIO_KBPS * max(audio_streams, 1)
-    budget_kbps = DISCORD_MAX_MB * 8192 * DISCORD_SIZE_MARGIN / max(duration, 1)
+    budget_kbps = max_mb * 8192 * DISCORD_SIZE_MARGIN / max(duration, 1)
     video_kbps = round(budget_kbps - audio_kbps)
     if video_kbps < DISCORD_MIN_VIDEO_KBPS:
         raise DiscordTooLarge(
             f"{duration:.0f}s with {max(audio_streams, 1)} audio track(s) "
-            f"cannot fit {DISCORD_MAX_MB} MB. Trim it shorter first.")
+            f"cannot fit {max_mb} MB. Trim it shorter first.")
     return video_kbps, DISCORD_AUDIO_KBPS
 
 
@@ -539,7 +540,8 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
                      *, accent: str = "#0099ff", fonts: Optional[Path] = None,
                      text_dir: Optional[Path] = None,
                      discord_optimized: bool = False,
-                     key_burn: Optional[KeyBurn] = None) -> list[str]:
+                     key_burn: Optional[KeyBurn] = None,
+                     discord_max_mb: int = DISCORD_MAX_MB) -> list[str]:
     """Build the full ffmpeg argv for a validated project. Pure: callers
     write out the text files (text_file_contents) before running it."""
     fonts = fonts or font_dir()
@@ -635,7 +637,7 @@ def build_export_cmd(project: dict, sources: dict[str, Source], out_path: Path,
 
     if discord_optimized:
         # One mixed track out, whatever the sources had.
-        video_kbps, audio_kbps = discord_bitrates(extent, 1)
+        video_kbps, audio_kbps = discord_bitrates(extent, 1, discord_max_mb)
         video_args = ["-c:v", "libx264", "-preset", "medium",
                      "-b:v", f"{video_kbps}k",
                      "-maxrate", f"{round(video_kbps * 1.45)}k",

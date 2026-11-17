@@ -166,7 +166,7 @@
     "shareTitle": "{action}. Fais un clic droit pour voir d'autres options de partage",
     "discordPreparing": "Création d'une copie adaptée à Discord",
     "discordCopied": "Copié pour Discord",
-    "discordCopiedDetail": "Colle-la dans un message Discord. Elle respecte la limite d'envoi gratuite.",
+    "discordCopiedDetail": "Colle-la dans un message Discord.",
     "errDiscordCopy": "Impossible de copier le clip pour Discord"
   },
   "playlistModal": {
@@ -688,9 +688,9 @@
     "audioPreviewFailed": "Impossible de lire cette piste audio. Réessaie ou consulte le journal.",
     "detachedTracksHelp": "Chaque source enregistrée a sa propre piste. Seule la piste 1 est activée au départ, pour qu'une piste combinée ne soit pas mixée deux fois. Réactive le son des sources que tu veux entendre.",
     "preparingMedia": "Préparation de l'aperçu",
-    "discordOptimize": "Optimiser pour Discord (moins de 20 Mo)",
+    "discordOptimize": "Optimiser pour Discord (moins de {mb} Mo)",
     "exportSummary": "{seconds}s · {format} vers {path}",
-    "exportFormatDiscord": "Optimisé pour Discord (moins de 20 Mo)",
+    "exportFormatDiscord": "Optimisé pour Discord (moins de {mb} Mo)",
     "exportFormatDefault": "H.264 et AAC",
     "exportFolderUnpicked": "un dossier de ton choix"
   },

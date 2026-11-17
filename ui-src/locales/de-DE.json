@@ -161,7 +161,7 @@
     "shareTitle": "{action}. Rechtsklick für weitere Wege zum Teilen",
     "discordPreparing": "Kopie in Discord-Größe wird erstellt",
     "discordCopied": "Für Discord kopiert",
-    "discordCopiedDetail": "Füg es in eine Discord-Nachricht ein. Es passt ins kostenlose Upload-Limit.",
+    "discordCopiedDetail": "Füg es in eine Discord-Nachricht ein.",
     "errDiscordCopy": "Clip konnte nicht für Discord kopiert werden"
   },
   "playlistModal": {
@@ -531,7 +531,7 @@
     "viceLibrary": "Vice-Bibliothek (Standard)",
     "customPath": "Eigener Pfad",
     "alsoAddToLibrary": "Auch zur Vice-Bibliothek hinzufügen",
-    "discordOptimize": "Für Discord optimieren (unter 20 MB)",
+    "discordOptimize": "Für Discord optimieren (unter {mb} MB)",
     "encoding": "H.264 wird encodiert. Du kannst dieses Fenster offen lassen oder in Vice woanders weitermachen.",
     "videoTrack": "Videospur",
     "audioTrack": "Audiospur",
@@ -644,7 +644,7 @@
     "detachedTracksHelp": "Jede aufgenommene Quelle hat ihre eigene Spur. Anfangs ist nur Spur 1 aktiv, damit eine kombinierte Spur nicht doppelt gemischt wird. Schalte die Quellen ein, die du hören willst.",
     "preparingMedia": "Vorschau wird vorbereitet",
     "exportSummary": "{seconds} s · {format} nach {path}",
-    "exportFormatDiscord": "Für Discord optimiert (unter 20 MB)",
+    "exportFormatDiscord": "Für Discord optimiert (unter {mb} MB)",
     "exportFormatDefault": "H.264 und AAC",
     "exportFolderUnpicked": "einen Ordner deiner Wahl"
   },

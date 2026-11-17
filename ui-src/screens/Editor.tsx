@@ -451,6 +451,8 @@ function ExportModal({
   const [custom, setCustom] = useState('');
   const [addToLibrary, setAddToLibrary] = useState(true);
   const [discordOptimized, setDiscordOptimized] = useState(false);
+  const {state} = useStore();
+  const mb = Number(state.config?.sharing?.discord_max_mb) || 20;
   const [showKeys, setShowKeys] = useState(true);
   const projectHasKeys =
     open &&
@@ -504,7 +506,7 @@ function ExportModal({
     location === 'library' ? libraryDir : location === 'videos' ? '~/Videos' : custom.trim() || '';
   const summary = t('editor.exportSummary', {
     seconds: Math.round(duration),
-    format: discordOptimized ? t('editor.exportFormatDiscord') : t('editor.exportFormatDefault'),
+    format: discordOptimized ? t('editor.exportFormatDiscord', {mb}) : t('editor.exportFormatDefault'),
     path: `${dir || t('editor.exportFolderUnpicked')}/${(name.trim() || 'Vice_Edit_N').replace(/\.mp4$/i, '')}.mp4`,
   });
 
@@ -639,9 +641,9 @@ function ExportModal({
             </label>
           ) : null}
           <label className="ed-export-field">
-            <span>{t('editor.discordOptimize')}</span>
+            <span>{t('editor.discordOptimize', {mb})}</span>
             <Toggle
-              label={t('editor.discordOptimize')}
+              label={t('editor.discordOptimize', {mb})}
               checked={discordOptimized}
               onChange={setDiscordOptimized}
             />

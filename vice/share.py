@@ -43,7 +43,7 @@ from aiohttp import WSMsgType, web
 
 from . import __version__
 from . import keys as keystore
-from .editor import (DISCORD_MAX_BYTES, DiscordTooLarge, EditorProjectStore,
+from .editor import (DISCORD_MAX_BYTES, DISCORD_MAX_MB, DiscordTooLarge, EditorProjectStore,
                      ExportBusy, ExportManager, KeyBurn, Source, build_export_cmd,
                      canvas_for,
                      default_export_name, discord_bitrates, project_extent,
@@ -56,6 +56,7 @@ from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
                        _is_nvidia, filename_tag, list_display_options,
                        list_gsr_audio_sources, next_image_path,
                        slugify_clip_name)
+from .config import DISCORD_SIZE_CHOICES
 from .runtime import actual_home_dir, load_user_systemd_env, resolve_path, session_launch_env
 
 log = logging.getLogger("vice.share")
@@ -411,14 +412,17 @@ async def _make_audio_preview(path: Path, index: int) -> Path:
         tmp.unlink(missing_ok=True)
 
 
-def _discord_path(path: Path) -> Path:
+def _discord_path(path: Path, max_mb: int = DISCORD_MAX_MB) -> Path:
     """Where a clip's Discord-sized copy goes, keyed by file identity for the
-    same reason as _proxy_path."""
+    same reason as _proxy_path, and by the size cap when it is not the free
+    one, so a copy made for one cap is never handed out for another."""
     try:
         st = path.stat()
         key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
     except OSError:
         key = path.stem
+    if max_mb != DISCORD_MAX_MB:
+        key += f"_{max_mb}mb"
     return path.parent / DISCORD_SUBDIR / f"{key}.mp4"
 
 
@@ -784,7 +788,8 @@ _DISCORD_TIMEOUT = 600
 
 
 async def _make_discord_copy(path: Path, duration: float,
-                            audio_streams: int = 1, vcodec: str = "") -> Optional[Path]:
+                            audio_streams: int = 1, vcodec: str = "",
+                            max_mb: int = DISCORD_MAX_MB) -> Optional[Path]:
     """Return a copy of *path* small enough to drop into a Discord chat.
 
     The source itself when it is already an H.264 MP4 that fits, a cached
@@ -797,20 +802,21 @@ async def _make_discord_copy(path: Path, duration: float,
     HEVC clip used to go out unconverted, and plenty of phones cannot play
     either in Discord (#289), so only H.264 is passed through.
     """
+    max_bytes = max_mb * 1024 * 1024
     try:
         already_small = (path.suffix.lower() == ".mp4"
                          and vcodec == "h264"
-                         and path.stat().st_size <= DISCORD_MAX_BYTES)
+                         and path.stat().st_size <= max_bytes)
     except OSError:
         return None
     if already_small:
         return path
 
-    out = _discord_path(path)
-    if out.exists() and 0 < out.stat().st_size <= DISCORD_MAX_BYTES:
+    out = _discord_path(path, max_mb)
+    if out.exists() and 0 < out.stat().st_size <= max_bytes:
         return out
 
-    video_kbps, audio_kbps = discord_bitrates(duration, audio_streams)
+    video_kbps, audio_kbps = discord_bitrates(duration, audio_streams, max_mb)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".mp4.tmp")
@@ -848,7 +854,7 @@ async def _make_discord_copy(path: Path, duration: float,
         # Single-pass ABR aims at the budget, it does not promise it. Never
         # hand out or cache a copy Discord would reject.
         size = tmp.stat().st_size
-        if size > DISCORD_MAX_BYTES:
+        if size > max_bytes:
             log.warning("Discord copy of %s came out at %.1f MB, over the cap",
                         path.name, size / 1048576)
             return None
@@ -1923,6 +1929,15 @@ class ShareServer:
             },
         )
 
+    def _discord_max_mb(self) -> int:
+        """The size cap for Discord copies, read per request so a change in
+        Settings applies to the next copy."""
+        try:
+            size = int(getattr(self.cfg.sharing, "discord_max_mb", DISCORD_MAX_MB))
+        except (TypeError, ValueError):
+            return DISCORD_MAX_MB
+        return size if size in DISCORD_SIZE_CHOICES else DISCORD_MAX_MB
+
     async def _prepare_discord_copy(self, slug: str, path: Path) -> Optional[Path]:
         """The clip's Discord-sized file, transcoding it once if needed.
 
@@ -1935,8 +1950,9 @@ class ShareServer:
         try:
             # A drag that is already encoded must not queue behind someone
             # else's encode: the whole library shares one encoder lock.
-            cached = _discord_path(path)
-            if cached.exists() and 0 < cached.stat().st_size <= DISCORD_MAX_BYTES:
+            max_mb = self._discord_max_mb()
+            cached = _discord_path(path, max_mb)
+            if cached.exists() and 0 < cached.stat().st_size <= max_mb * 1024 * 1024:
                 return cached
             async with self._proxy_lock:
                 meta = await self._get_meta(slug, path)
@@ -1945,6 +1961,7 @@ class ShareServer:
                     meta.get("duration", 0),
                     meta.get("audio_streams", 1),
                     meta.get("vcodec", ""),
+                    max_mb,
                 )
         finally:
             self._proxy_tasks.discard(task)
@@ -2420,7 +2437,7 @@ class ShareServer:
             "path": str(copy_path),
             "filename": f"{slug}.mp4",
             "size": st.st_size,
-            "limit": DISCORD_MAX_BYTES,
+            "limit": self._discord_max_mb() * 1024 * 1024,
         })
 
     async def _api_images(self, _: web.Request) -> web.Response:
@@ -2839,7 +2856,8 @@ class ShareServer:
                                    accent=accent,
                                    text_dir=work,
                                    discord_optimized=discord_optimized,
-                                   key_burn=key_burn)
+                                   key_burn=key_burn,
+                                   discord_max_mb=self._discord_max_mb())
         except DiscordTooLarge as exc:
             shutil.rmtree(work, ignore_errors=True)
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
@@ -2866,7 +2884,8 @@ class ShareServer:
         try:
             self._exports.start(job_id, cmd, project_extent(project), tmp, final,
                                 on_done=on_done, cleanup=cleanup,
-                                max_bytes=DISCORD_MAX_BYTES if discord_optimized else None)
+                                max_bytes=(self._discord_max_mb() * 1024 * 1024
+                                           if discord_optimized else None))
         except ExportBusy:
             cleanup()
             return web.json_response(
@@ -2937,6 +2956,7 @@ class ShareServer:
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
             UIConfig, OverlayConfig, VoiceConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_notifications,
+            normalize_sharing,
             normalize_overlay,
             normalize_voice,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
@@ -3043,6 +3063,7 @@ class ShareServer:
         clamp_recording_limits(new_cfg)
         normalize_overlay(new_cfg)
         normalize_notifications(new_cfg)
+        normalize_sharing(new_cfg)
         normalize_voice(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
@@ -3057,6 +3078,7 @@ class ShareServer:
         new_sharing = copy.deepcopy(new_cfg.sharing)
         old_sharing.embed_color = new_sharing.embed_color = ""
         old_sharing.share_discord_file = new_sharing.share_discord_file = False
+        old_sharing.discord_max_mb = new_sharing.discord_max_mb = DISCORD_MAX_MB
         restart_required = (
             old_sharing != new_sharing
             or old_cfg.recording.gsr_args != new_cfg.recording.gsr_args

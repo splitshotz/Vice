@@ -161,6 +161,7 @@ The Flatpak also works on any other distro with Flatpak installed.
 | **F9** during a session | Drop a highlight at this moment |
 | **Click a thumbnail** | Open viewer · ← → next/prev · **H** new highlight · **Esc** close |
 | **Share** | Copy the public URL (pastes into Discord as a playable embed) |
+| **Right-click Share** | Copy the clip as a file sized for Discord: 20 MB, or 50 or 500 MB for Nitro (Settings → Sharing) |
 | **Trim** | Drag handles to crop a clip in place |
 
 Clips live in `~/Videos/Vice/`. Closing the window keeps the daemon recording; reopen from your launcher any time.
@@ -261,6 +262,7 @@ port              = 8765  # local control UI (always 127.0.0.1)
 public_port       = 8766  # public share-only server (defaults to port + 1)
 cloudflare_tunnel = true
 base_url          = ""    # optional public origin override (reverse proxy / custom domain)
+discord_max_mb    = 20    # size of a Discord copy: 20 (free), 50 (Nitro Basic) or 500 (Nitro)
 
 [discord]
 enabled            = true   # shows Rich Presence when a known/custom game is focused

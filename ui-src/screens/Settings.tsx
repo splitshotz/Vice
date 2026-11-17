@@ -1039,6 +1039,21 @@ export function Settings() {
               onChange={shareDiscordFile => update({shareDiscordFile})}
             />
           </Row>
+
+          <Row
+            label={t('settings.discordMaxMb')}
+            help={t('settings.discordMaxMbHelp')}>
+            <Select
+              label={t('settings.discordMaxMb')}
+              value={draft.discordMaxMb}
+              onChange={discordMaxMb => update({discordMaxMb})}
+              options={[
+                ['20', t('settings.discordSizeFree')],
+                ['50', t('settings.discordSizeBasic')],
+                ['500', t('settings.discordSizeNitro')],
+              ]}
+            />
+          </Row>
         </Card>
 
         {/* ── Discord ───────────────────────────────────────────── */}

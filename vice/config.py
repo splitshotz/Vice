@@ -232,6 +232,9 @@ class SharingConfig:
     # Discord-sized copy of the clip file. Right-click opens the share sheet
     # either way. Off unless chosen during setup or in Settings.
     share_discord_file: bool = False
+    # Size cap of a Discord copy in MB: 20 is the free upload limit, 50 Nitro
+    # Basic, 500 Nitro (#308).
+    discord_max_mb: int = 20
 
 
 @dataclass
@@ -510,6 +513,17 @@ def normalize_overlay(cfg: "Config") -> None:
     ov.keys_layout = layout
 
 
+DISCORD_SIZE_CHOICES = (20, 50, 500)
+
+
+def normalize_sharing(cfg: "Config") -> None:
+    try:
+        size = int(cfg.sharing.discord_max_mb)
+    except (TypeError, ValueError):
+        size = 20
+    cfg.sharing.discord_max_mb = size if size in DISCORD_SIZE_CHOICES else 20
+
+
 def normalize_notifications(cfg: "Config") -> None:
     from .audio import normalize_pack  # audio imports nothing from config
     cfg.notifications.sound_pack = normalize_pack(cfg.notifications.sound_pack)
@@ -673,6 +687,7 @@ def load() -> Config:
     clamp_recording_limits(cfg)
     normalize_overlay(cfg)
     normalize_notifications(cfg)
+    normalize_sharing(cfg)
     normalize_voice(cfg)
     return cfg
 

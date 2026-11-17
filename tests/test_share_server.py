@@ -1030,6 +1030,50 @@ class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first, again)
             self.assertEqual(len(captured), 1)
 
+    async def test_a_larger_cap_spends_more_bits_and_keeps_its_own_copy(self) -> None:
+        """#308: Nitro accounts upload more than 20 MB, and a copy made for
+        one cap must not be handed out for another."""
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                free = await share_mod._make_discord_copy(src, 120)
+                basic = await share_mod._make_discord_copy(src, 120, max_mb=50)
+                again = await share_mod._make_discord_copy(src, 120, max_mb=50)
+            self.assertNotEqual(free, basic)
+            self.assertEqual(basic, again)
+            self.assertEqual(len(captured), 2)
+            self.assertGreater(self._kbps(captured[1]), self._kbps(captured[0]) * 2)
+            self.assertLess((self._kbps(captured[1]) + 128) * 120 / 8192, 50)
+            # Deleting the clip takes every copy with it.
+            share_mod._purge_clip_discord(src)
+            self.assertFalse(free.exists() or basic.exists())
+
+    async def test_a_clip_too_long_for_the_free_cap_fits_a_larger_one(self) -> None:
+        import vice.share as share_mod
+        from vice.editor import DiscordTooLarge
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg([])):
+                with self.assertRaises(DiscordTooLarge) as caught:
+                    await share_mod._make_discord_copy(src, 1800)
+                self.assertIn("20 MB", str(caught.exception))
+                self.assertIsNotNone(await share_mod._make_discord_copy(src, 1800, max_mb=500))
+
+    def test_an_unknown_size_falls_back_to_the_free_cap(self) -> None:
+        from vice.config import Config, normalize_sharing
+        cfg = Config()
+        self.assertEqual(cfg.sharing.discord_max_mb, 20)
+        for value, expected in ((50, 50), (500, 500), ("50", 50), (37, 20), (0, 20), ("big", 20), (None, 20)):
+            cfg.sharing.discord_max_mb = value
+            normalize_sharing(cfg)
+            self.assertEqual(cfg.sharing.discord_max_mb, expected, value)
+
     def test_purge_removes_the_cached_copy(self) -> None:
         import vice.share as share_mod
         with tempfile.TemporaryDirectory() as tmp:
