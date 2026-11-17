@@ -194,8 +194,6 @@ OBS has a replay buffer. So why use Vice?
 
 Game detection (filename tagging and Discord presence) works on X11, Hyprland, sway and Niri. Works on KDE Plasma Wayland when `kdotool` is available. On other compositors clips simply save untagged.
 
-Automatic session stopping monitors the process bound when the session starts. If a launcher exits while its game keeps running, enabling both automatic session options can split the recording into separate saved sessions.
-
 ## CLI
 
 ```
