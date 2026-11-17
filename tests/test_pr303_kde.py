@@ -13,7 +13,7 @@ from contextlib import ExitStack
 from unittest import mock
 
 from tests import test_auto_start_sessions as sessions
-from vice import active_window as aw
+from vice import active_window as aw, runtime
 from vice.config import Config
 from vice.main import ViceDaemon
 
@@ -86,6 +86,7 @@ class KdeOffControl(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(aw, '_run', return_value=''),
             mock.patch.object(aw, '_get_active_window_x11', return_value=stale),
             mock.patch('vice.main.scan_game_windows') as scan,
+            mock.patch.object(aw, '_kde_scan_supported') as probe,
         ):
             before = aw.get_active_window()
             await d._sync_auto_start_task()
@@ -93,6 +94,7 @@ class KdeOffControl(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before, stale)
             self.assertEqual(aw.get_active_window(), before)
             scan.assert_not_called()
+            probe.assert_not_called()
             self.assertIsNone(d._auto_start_task)
             self.assertIsNone(d._auto_start_store)
 
@@ -170,6 +172,53 @@ class KdeInlineCapabilityContracts(unittest.TestCase):
     def test_installed_incompatible_kdotool_reports_unsupported(self):
         install_cli(self, self.native, 'old')
         self.assertFalse(self.native.auto_start_scan_supported())
+
+    def test_missing_tool_is_unsupported_when_focus_adapter_falls_back_to_x11(self):
+        install_cli(self, self.native, 'old', installed=False)
+        self.native._ADAPTER = self.native._get_active_window_x11
+        with mock.patch.object(self.native, '_scan_x11_game_windows') as x11:
+            self.assertFalse(self.native.auto_start_scan_supported())
+            self.assertIsNone(self.native.scan_game_windows())
+            x11.assert_not_called()
+
+    def test_missing_tool_without_xwayland_does_not_repeat_host_presence_probes(self):
+        install_cli(self, self.native, 'old', installed=False)
+        self.native._ADAPTER = None
+        with (
+            mock.patch.dict(os.environ, {'DISPLAY': '', 'HYPRLAND_INSTANCE_SIGNATURE': '',
+                                         'SWAYSOCK': '', 'NIRI_SOCKET': ''}),
+            mock.patch.object(self.native, 'host_which', return_value=False) as which,
+        ):
+            self.assertEqual([self.native.auto_start_scan_supported() for _ in range(3)],
+                             [False, False, False])
+            self.assertIsNone(self.native.scan_game_windows())
+        which.assert_called_once_with('kdotool')
+
+    def test_flatpak_probes_and_scans_host_kdotool_without_local_tools(self):
+        fake = FakeKdotool('compatible')
+        commands = []
+
+        def run_host(command, **kwargs):
+            commands.append(command)
+            self.assertEqual(command[:2], ['flatpak-spawn', '--host'])
+            if command[-2:] == ['sh', 'kdotool']:
+                return subprocess.CompletedProcess(command, 0, b'', b'')
+            # host_argv can insert --env flags before the executable.
+            return fake(command[command.index('kdotool'):], **kwargs)
+
+        with (
+            mock.patch.dict(os.environ, KDE_ENV),
+            mock.patch.object(runtime, 'in_vice_flatpak', return_value=True),
+            mock.patch.object(self.native.shutil, 'which', return_value=None),
+            mock.patch.object(self.native.subprocess, 'run', side_effect=run_host),
+            mock.patch.object(self.native, '_read_proc_comm', return_value='cs2'),
+        ):
+            self.assertTrue(self.native.auto_start_scan_supported())
+            self.assertTrue(self.native.auto_start_scan_supported())
+            self.assertIsNotNone(self.native.scan_game_windows())
+        self.assertEqual(len(commands), 3)  # host presence, help probe, scan
+        self.assertEqual(fake.calls[0], ('kdotool', '--help'))
+        self.assertEqual(fake.calls[1][:3], ('kdotool', 'kwinscript', '--inline'))
 
     def test_unsupported_capability_result_is_probed_and_cached(self):
         fake = install_cli(self, self.native, 'old')

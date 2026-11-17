@@ -372,7 +372,7 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(scanning, 3)
         self.assertFalse(d._session_active)
         self.assertEqual(d._auto_start_error, 'state')
-        self.assertTrue(d._auto_start_state_blocked)
+        self.assertTrue(d._auto_start_storage_failed)
         await d._set_auto_start_error('unsupported')
         self.assertEqual(d._auto_start_error, 'state')
         d.cfg.recording.session_start_on_game_detect = False
@@ -380,7 +380,9 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         d.cfg.recording.session_start_on_game_detect = True
         await self.detect()
         self.assertFalse(d._session_active)
-        self.assertEqual(d._auto_start_error, 'state')
+        self.assertFalse(d._auto_start_storage_failed)
+        self.assertIsNone(d._auto_start_error)
+        self.assertIn(self.identities[42], d._auto_start_suppressed)
 
     async def test_scan_after_manual_stop_preserves_new_suppression_during_cleanup(self):
         d = self.daemon
@@ -439,12 +441,17 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         def load():
             entered.set()
             release.wait(3)
-            return set()
-        with mock.patch.object(SuppressionStore, 'load', side_effect=load):
+            return set(), False, 2
+        with mock.patch.object(SuppressionStore, 'load_snapshot', side_effect=load):
             loading = asyncio.create_task(d._ensure_auto_start_store())
             self.assertTrue(await asyncio.to_thread(entered.wait, 3))
             await d._set_auto_start_error('state')
             release.set()
             self.assertFalse(await asyncio.wait_for(loading, 3))
         self.assertEqual(d._auto_start_error, 'state')
-        self.assertTrue(d._auto_start_state_blocked)
+        self.assertTrue(d._auto_start_storage_failed)
+        # A stale operation cannot clear a newer failure; a subsequent
+        # successful retry can recover instead of latching it permanently.
+        self.assertTrue(await d._ensure_auto_start_store())
+        self.assertFalse(d._auto_start_storage_failed)
+        self.assertIsNone(d._auto_start_error)

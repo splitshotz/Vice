@@ -8,6 +8,7 @@ from unittest import mock
 from tests import test_session_game_tagging as tagging
 from vice.main import AutoStartTarget
 from vice.session_process import ProcessIdentity
+from vice.session_auto_start import SuppressionStore
 
 
 class SessionAutoStopTests(unittest.IsolatedAsyncioTestCase):
@@ -110,6 +111,14 @@ class SessionAutoStopTests(unittest.IsolatedAsyncioTestCase):
         d.cfg.recording.session_stop_on_game_exit = True
         d.cfg.recording.session_start_on_game_detect = True
         d.cfg.output.tag_clips_with_game = True
+        # Real automatic starts initialize suppression state before passing
+        # a selected target to the session controller.
+        d._init_auto_start()
+        with mock.patch('vice.main.read_host_boot_id',
+                        return_value='11111111-1111-1111-1111-111111111111'), \
+             mock.patch('vice.main.SuppressionStore', side_effect=lambda boot: SuppressionStore(
+                 boot, self.root / 'auto-start.json')):
+            self.assertTrue(await d._ensure_auto_start_store())
         selected = AutoStartTarget('Counter-Strike 2', self.window, self.identity)
         with mock.patch('vice.main.probe_game_process', return_value='running'), \
              mock.patch('vice.active_window.get_active_window') as focused, \

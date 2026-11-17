@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -232,19 +233,13 @@ def _active_window_geometry_niri() -> Optional[tuple[int, int]]:
 
 # ─── KDE Plasma / KWin ─────────────────────────────────────────────────────
 def _get_active_window_kde() -> Optional[ActiveWindow]:
-    window_id = _run(["kdotool", "getactivewindow"]).strip()
-    if not window_id:
-        if os.environ.get("DISPLAY"):
-            return _get_active_window_x11()
-        return None
-
-    pid_text = _run(["kdotool", "getwindowpid", window_id]).strip()
+    pid_text = _run(["kdotool", "getactivewindow", "getwindowpid"]).strip()
     try:
         pid = int(pid_text) if pid_text else 0
     except ValueError:
         pid = 0
 
-    cls = _run(["kdotool", "getwindowclassname", window_id]).strip()
+    cls = _run(["kdotool", "getactivewindow", "getwindowclassname"]).strip()
 
     proc = _read_proc_comm(pid) if pid else ""
     if not (cls or proc):
@@ -569,13 +564,50 @@ def _x11_scan_tools_available() -> bool:
     ))
 
 
+_KDE_INLINE_SUPPORTED: bool | None = None
+_KDE_INLINE_PROBE_LOCK = threading.Lock()
+
+
+def _kde_scan_supported() -> bool:
+    """Probe the host command set once, without executing a KWin script."""
+    global _KDE_INLINE_SUPPORTED
+    with _KDE_INLINE_PROBE_LOCK:
+        if _KDE_INLINE_SUPPORTED is None:
+            help_text = _run_scan_command(["kdotool", "--help"]) if host_which("kdotool") else None
+            _KDE_INLINE_SUPPORTED = bool(help_text and re.search(
+                r"(?m)^\s*kwinscript\b[^\n]*--inline\b", help_text,
+            ))
+        return _KDE_INLINE_SUPPORTED
+
+
+def _game_scan_adapter() -> Optional[Callable[[], Optional[ActiveWindow]]]:
+    # With neither kdotool nor DISPLAY, focus detection intentionally leaves
+    # its adapter uncached. Background support checks must still cache the
+    # missing host capability instead of probing on every polling cycle.
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    if (_ADAPTER is None and os.environ.get("WAYLAND_DISPLAY")
+            and ("kde" in desktop or "plasma" in desktop)
+            and not any(os.environ.get(key) for key in (
+                "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "NIRI_SOCKET"))):
+        return _get_active_window_kde
+    return _current_adapter()
+
+
+def _uses_kde_game_scan(adapter: Optional[Callable[[], Optional[ActiveWindow]]]) -> bool:
+    # Focus detection may select X11 when KDE lacks kdotool. That fallback
+    # cannot enumerate native Wayland games and must not advertise support.
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    return adapter is _get_active_window_kde or (
+        adapter is _get_active_window_x11 and bool(os.environ.get("WAYLAND_DISPLAY"))
+        and ("kde" in desktop or "plasma" in desktop)
+    )
+
+
 def auto_start_scan_supported() -> bool:
     """Whether this session has a background window enumeration adapter."""
-    adapter = _current_adapter()
-    if adapter is _get_active_window_kde:
-        return bool(host_which("kdotool") or (
-            os.environ.get("DISPLAY") and _x11_scan_tools_available()
-        ))
+    adapter = _game_scan_adapter()
+    if _uses_kde_game_scan(adapter):
+        return _kde_scan_supported()
     if adapter is _get_active_window_x11:
         return _x11_scan_tools_available()
     return False
@@ -587,15 +619,9 @@ def scan_game_windows() -> WindowScan | None:
     None means unsupported or failed; a successful scan with no windows has
     an empty `windows` list. Captions are intentionally omitted.
     """
-    adapter = _current_adapter()
-    if adapter is _get_active_window_kde:
-        if host_which("kdotool"):
-            scan = _scan_kde_game_windows()
-            if scan is not None:
-                return scan
-        if os.environ.get("DISPLAY"):
-            return _scan_x11_game_windows()
-        return None
+    adapter = _game_scan_adapter()
+    if _uses_kde_game_scan(adapter):
+        return _scan_kde_game_windows() if _kde_scan_supported() else None
     if adapter is _get_active_window_x11:
         return _scan_x11_game_windows()
     return None

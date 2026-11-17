@@ -700,11 +700,9 @@ class CompositorAdapterTests(unittest.TestCase):
         from vice import active_window as aw
 
         def fake_run(cmd, timeout=1.0):
-            if cmd == ["kdotool", "getactivewindow"]:
-                return "42\n"
-            if cmd == ["kdotool", "getwindowpid", "42"]:
+            if cmd == ["kdotool", "getactivewindow", "getwindowpid"]:
                 return "75457\n"
-            if cmd == ["kdotool", "getwindowclassname", "42"]:
+            if cmd == ["kdotool", "getactivewindow", "getwindowclassname"]:
                 return "steam_app_3527290\n"
             return ""
 

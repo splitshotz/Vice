@@ -57,7 +57,8 @@ class SuppressionStoreTests(unittest.TestCase):
         self.assertEqual(self.store.load(), entries)
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
         document = json.loads(self.path.read_text())
-        self.assertEqual(document["version"], 1)
+        self.assertEqual(document["version"], 2)
+        self.assertIs(document["pending"], False)
         self.assertEqual(document["boot_id"], BOOT_ID)
         self.assertEqual(
             document["suppressed"],
@@ -74,7 +75,7 @@ class SuppressionStoreTests(unittest.TestCase):
     def test_malformed_state_is_rejected_and_preserved(self) -> None:
         malformed = (
             "{",
-            json.dumps({"version": 2, "boot_id": BOOT_ID, "suppressed": []}),
+            json.dumps({"version": 999, "boot_id": BOOT_ID, "suppressed": []}),
             json.dumps({"version": 1, "boot_id": "", "suppressed": []}),
             json.dumps({"version": 1, "boot_id": "corrupt", "suppressed": []}),
             json.dumps({"version": 1, "boot_id": BOOT_ID, "suppressed": [{"pid": True, "start_time": 5}]}),
@@ -95,6 +96,29 @@ class SuppressionStoreTests(unittest.TestCase):
             with self.assertRaises(AutoStartStateError):
                 self.store.load()
         self.assertTrue(self.path.exists())
+
+    def test_version_one_load_and_pending_snapshot_round_trip(self) -> None:
+        self.path.write_text(json.dumps({
+            'version': 1, 'boot_id': BOOT_ID,
+            'suppressed': [{'pid': 42, 'start_time': 1234}],
+        }))
+        known = {ProcessIdentity(42, 1234)}
+        self.assertEqual(self.store.load_snapshot(), (known, False, 1))
+        self.store.save(known, pending=True)
+        self.assertEqual(self.store.load_snapshot(), (known, True, 2))
+        other_boot = SuppressionStore('22222222-2222-2222-2222-222222222222', self.path)
+        self.assertEqual(other_boot.load_snapshot(), (set(), False, 2))
+
+    def test_private_unique_diagnostic_backups_preserve_original_bytes(self) -> None:
+        original = b'{not-json\n'
+        self.path.write_bytes(original)
+        first = self.store.backup_corrupt()
+        second = self.store.backup_corrupt()
+        self.assertNotEqual(first, second)
+        for backup in (first, second):
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        self.assertEqual(self.path.read_bytes(), original)
 
     def test_failed_atomic_write_keeps_previous_state(self) -> None:
         self.store.save({ProcessIdentity(42, 1234)})

@@ -39,7 +39,7 @@ from . import __version__
 from .active_window import steam_game_name
 from .session_process import ProcessIdentity, bind_game_process, probe_game_process
 from .active_window import scan_game_windows, auto_start_scan_supported
-from .session_auto_start import AutoStartStateError, SuppressionStore, read_host_boot_id
+from .session_auto_start import AutoStartStateError, MalformedAutoStartState, SuppressionStore, read_host_boot_id
 from .config import (
     CLIP_DURATION_MIN,
     Config,
@@ -1815,7 +1815,12 @@ class ViceDaemon:
         self._auto_start_wake = asyncio.Event()
         self._auto_start_shutdown = False
         self._auto_start_error: Optional[str] = None
-        self._auto_start_state_blocked = False
+        self._auto_start_storage_failed = False
+        self._auto_start_storage_failure_epoch = 0
+        self._auto_start_io_lock = asyncio.Lock()
+        self._auto_start_dirty = False
+        self._auto_start_pending_suppression = False
+        self._auto_start_generation = 0
         self._auto_start_store: Optional[SuppressionStore] = None
         self._auto_start_suppressed: set[ProcessIdentity] = set()
         self._auto_start_attempts: dict[ProcessIdentity, tuple[int, float]] = {}
@@ -1823,8 +1828,9 @@ class ViceDaemon:
 
     async def _set_auto_start_error(self, error: Optional[str]) -> None:
         if error == "state":
-            self._auto_start_state_blocked = True
-        if self._auto_start_state_blocked and self.cfg.recording.session_start_on_game_detect:
+            self._auto_start_storage_failed = True
+            self._auto_start_storage_failure_epoch += 1
+        if self._auto_start_storage_failed:
             error = "state"
         if self._auto_start_error == error:
             return
@@ -1834,36 +1840,74 @@ class ViceDaemon:
         if self.share:
             await self.share.broadcast({"type": "status", "session_auto_start_error": error})
 
+    async def _refresh_auto_start_store_locked(self) -> bool:
+        """Called with the persistence lock; never acquires the session lock."""
+        observed = self._auto_start_storage_failure_epoch
+        try:
+            if self._auto_start_store is None:
+                boot_id = await asyncio.to_thread(read_host_boot_id)
+                store = SuppressionStore(boot_id)
+                try:
+                    saved, pending, version = await asyncio.to_thread(store.load_snapshot)
+                except MalformedAutoStartState:
+                    log.exception('Malformed automatic-session suppression state')
+                    backup = await asyncio.to_thread(store.backup_corrupt)
+                    log.warning('Preserved malformed suppression state at %s', backup)
+                    saved, pending, version = set(), False, 2
+                    self._auto_start_dirty = True
+                changed = bool(saved - self._auto_start_suppressed) or (
+                    pending and not self._auto_start_pending_suppression
+                )
+                self._auto_start_suppressed.update(saved)
+                self._auto_start_pending_suppression |= pending
+                if changed:
+                    self._auto_start_generation += 1
+                    self._auto_start_pending = None
+                self._auto_start_store = store
+                if version == 1:
+                    self._auto_start_dirty = True
+            if self._auto_start_dirty:
+                await asyncio.to_thread(
+                    self._auto_start_store.save, self._auto_start_suppressed,
+                    pending=self._auto_start_pending_suppression,
+                )
+                self._auto_start_dirty = False
+        except (AutoStartStateError, OSError):
+            log.exception('Cannot load or save automatic session suppression state')
+            await self._set_auto_start_error('state')
+            return False
+        if observed != self._auto_start_storage_failure_epoch:
+            return False
+        self._auto_start_storage_failed = False
+        if self._auto_start_error == 'state':
+            await self._set_auto_start_error(None)
+        return True
+
     async def _ensure_auto_start_store(self) -> bool:
-        if self._auto_start_state_blocked:
-            await self._set_auto_start_error("state")
-            return False
-        if self._auto_start_store is not None:
-            return True
-        try:
-            boot_id = await asyncio.to_thread(read_host_boot_id)
-            store = SuppressionStore(boot_id)
-            saved = await asyncio.to_thread(store.load)
-            self._auto_start_suppressed.update(saved)
-            self._auto_start_store = store
-            return not self._auto_start_state_blocked
-        except (AutoStartStateError, OSError):
-            log.exception("Cannot load automatic session suppression state")
-            await self._set_auto_start_error("state")
-            return False
+        async with self._auto_start_io_lock:
+            return await self._refresh_auto_start_store_locked()
 
-    async def _save_auto_start_suppression(self, identities: set[ProcessIdentity]) -> bool:
-        # Retain new manual stops in memory even if durable storage fails.
-        self._auto_start_suppressed = identities
-        try:
-            await asyncio.to_thread(self._auto_start_store.save, identities)
-            return True
-        except (AutoStartStateError, OSError):
-            log.exception("Cannot save automatic session suppression state")
-            await self._set_auto_start_error("state")
-            return False
+    async def _save_auto_start_suppression(
+        self, identities: set[ProcessIdentity], *, pending: bool = False,
+        merge: bool = False,
+    ) -> bool:
+        async with self._auto_start_io_lock:
+            # Manual stops can wait behind an initial load. Merge under the
+            # same lock so newly loaded identities/pending intent survive.
+            if merge:
+                self._auto_start_suppressed.update(identities)
+                self._auto_start_pending_suppression |= pending
+            else:
+                self._auto_start_suppressed = set(identities)
+                self._auto_start_pending_suppression = pending
+            self._auto_start_dirty = True
+            self._auto_start_generation += 1
+            self._auto_start_pending = None
+            return await self._refresh_auto_start_store_locked()
 
-    def _scan_auto_start_targets(self) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity]]]:
+    def _scan_auto_start_targets(
+        self, *, require_identities: bool = False,
+    ) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity]]]:
         scan = scan_game_windows()
         if scan is None:
             return None
@@ -1875,6 +1919,11 @@ class ViceDaemon:
                 continue
             identity = bind_game_process(win)
             if identity is None:
+                # Resolving a deferred manual stop requires identities for
+                # every recognized game; a temporary /proc miss must not
+                # erase intent and let that same instance restart later.
+                if require_identities or self._auto_start_pending_suppression:
+                    return None
                 continue
             targets.setdefault(identity, AutoStartTarget(game, win, identity))
             if win.get("window_id") == scan.focused_window_id:
@@ -1882,26 +1931,30 @@ class ViceDaemon:
         return list(targets.values()), focused
 
     async def _suppress_manually_stopped_session(self) -> None:
-        if not (self.cfg.recording.session_start_on_game_detect or self._auto_start_store):
+        if not (self.cfg.recording.session_start_on_game_detect
+                or self._auto_start_store or self._auto_start_pending_suppression):
             return
-        if not await self._ensure_auto_start_store():
-            return
+        # Capture the identity before any storage I/O can fail or suspend us.
         identity = getattr(self, "_session_process_identity", None)
         if identity is not None:
             stopped = {identity}
+            pending = False
         else:
-            # A session begun before auto-start was enabled may have no binding.
-            # A failed scan cannot safely establish which instances to suppress.
             try:
-                scan = await asyncio.to_thread(self._scan_auto_start_targets)
+                scan = await asyncio.to_thread(self._scan_auto_start_targets, require_identities=True)
             except Exception:
                 scan = None
                 log.exception("Cannot identify games during manual session stop")
             if scan is None:
-                await self._set_auto_start_error("state")
-                return
-            stopped = {target.identity for target in scan[0]}
-        await self._save_auto_start_suppression(self._auto_start_suppressed | stopped)
+                await self._set_auto_start_error('detection')
+                stopped = set()
+                pending = True
+            else:
+                stopped = {target.identity for target in scan[0]}
+                pending = False
+        await self._save_auto_start_suppression(
+            stopped, pending=pending, merge=True,
+        )
 
     async def _sync_auto_start_task(self) -> None:
         self._init_auto_start()
@@ -1951,6 +2004,7 @@ class ViceDaemon:
             return
         # A disappearing window is not process exit. Only the process probe
         # may release suppression or attempt limits, including across scans.
+        probe_generation = self._auto_start_generation
         tracked = self._auto_start_suppressed | self._auto_start_attempts.keys()
         expired = set()
         for identity in tracked:
@@ -1958,36 +2012,57 @@ class ViceDaemon:
                 expired.add(identity)
         if expired:
             async with self._session_lock:
+                if probe_generation != self._auto_start_generation:
+                    self._auto_start_pending = None
+                    return
                 for identity in expired:
                     self._auto_start_attempts.pop(identity, None)
                 remaining = self._auto_start_suppressed - expired
                 if remaining != self._auto_start_suppressed:
-                    if not await self._save_auto_start_suppression(remaining):
+                    if not await self._save_auto_start_suppression(
+                        remaining, pending=self._auto_start_pending_suppression,
+                    ):
+                        self._auto_start_pending = None
                         return
         if self._session_active or not self._ready:
             self._auto_start_pending = None
             return
-        if self._auto_start_error == "state":
+        if self._auto_start_storage_failed or self._auto_start_dirty:
+            self._auto_start_pending = None
             return
         if not await asyncio.to_thread(auto_start_scan_supported):
             self._auto_start_pending = None
             await self._set_auto_start_error("unsupported")
             return
+        scan_generation = self._auto_start_generation
         scan = await asyncio.to_thread(self._scan_auto_start_targets)
-        if scan is None:
-            self._auto_start_pending = None
-            await self._set_auto_start_error("detection")
-            return
-        if self._auto_start_error == "state":
-            self._auto_start_pending = None
-            return
-        await self._set_auto_start_error(None)
-        targets, focused = scan
-        selected = targets[0] if len(targets) == 1 else next(
-            (target for target in targets if target.identity == focused), None)
-        identity = selected.identity if selected else None
-        previous = self._auto_start_pending
-        self._auto_start_pending = identity
+        async with self._session_lock:
+            if (scan_generation != self._auto_start_generation
+                    or not self.cfg.recording.session_start_on_game_detect
+                    or self._auto_start_shutdown or self._session_active or not self._ready):
+                self._auto_start_pending = None
+                return
+            if self._auto_start_storage_failed or self._auto_start_dirty:
+                self._auto_start_pending = None
+                return
+            if scan is None:
+                self._auto_start_pending = None
+                await self._set_auto_start_error('detection')
+                return
+            targets, focused = scan
+            if self._auto_start_pending_suppression:
+                identities = {target.identity for target in targets}
+                if not await self._save_auto_start_suppression(
+                    self._auto_start_suppressed | identities, pending=False,
+                ):
+                    self._auto_start_pending = None
+                    return
+            await self._set_auto_start_error(None)
+            selected = targets[0] if len(targets) == 1 else next(
+                (target for target in targets if target.identity == focused), None)
+            identity = selected.identity if selected else None
+            previous = self._auto_start_pending
+            self._auto_start_pending = identity
         if selected is not None and identity == previous:
             await self._change_session(True, automatic_target=selected)
 
@@ -1996,7 +2071,10 @@ class ViceDaemon:
         return (self.cfg.recording.session_start_on_game_detect
                 and not self._auto_start_shutdown and self._ready
                 and not self._session_active and self._auto_start_error is None
-                and not self._auto_start_state_blocked
+                and self._auto_start_store is not None
+                and not self._auto_start_storage_failed
+                and not self._auto_start_dirty
+                and not self._auto_start_pending_suppression
                 and target.identity not in self._auto_start_suppressed
                 and attempts < 3 and time.monotonic() >= retry_at)
 

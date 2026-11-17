@@ -44,15 +44,14 @@ class ActiveWindowIdentityX11Tests(unittest.TestCase):
 
 
 class ActiveWindowIdentityKDETests(unittest.TestCase):
-    def test_pid_and_class_are_read_from_one_stable_active_window_id(self) -> None:
+    def test_kde_preserves_the_two_chained_focus_queries(self) -> None:
         commands = []
 
         def run(command):
             commands.append(command)
             return {
-                ("kdotool", "getactivewindow"): "42\n",
-                ("kdotool", "getwindowpid", "42"): "1234\n",
-                ("kdotool", "getwindowclassname", "42"): "TestGame\n",
+                ("kdotool", "getactivewindow", "getwindowpid"): "1234\n",
+                ("kdotool", "getactivewindow", "getwindowclassname"): "TestGame\n",
             }.get(tuple(command), "")
 
         with mock.patch("vice.active_window._run", side_effect=run), \
@@ -61,9 +60,8 @@ class ActiveWindowIdentityKDETests(unittest.TestCase):
 
         self.assertEqual(win, {"process": "testgame", "class": "TestGame", "pid": 1234})
         self.assertEqual(commands, [
-            ["kdotool", "getactivewindow"],
-            ["kdotool", "getwindowpid", "42"],
-            ["kdotool", "getwindowclassname", "42"],
+            ["kdotool", "getactivewindow", "getwindowpid"],
+            ["kdotool", "getactivewindow", "getwindowclassname"],
         ])
 
 

@@ -17,6 +17,11 @@ class KdeWindowScanTests(unittest.TestCase):
         self.display_patch = mock.patch.dict(os.environ, {'DISPLAY': ''})
         self.display_patch.start()
         self.addCleanup(self.display_patch.stop)
+        # These cases exercise scanner parsing/transport. Real capability
+        # probing and caching are covered separately in test_pr303_kde.
+        patcher = mock.patch.object(aw, '_kde_scan_supported', return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_native_kde_scan_returns_windows_and_focused_id_from_one_command(self):
         payload = {
@@ -88,22 +93,23 @@ class KdeWindowScanTests(unittest.TestCase):
         self.assertEqual(scan, aw.WindowScan([], None))
         self.assertEqual(seen[0][:3], ["flatpak-spawn", "--host", "kdotool"])
 
-    def test_missing_kdotool_falls_back_to_x11_when_display_exists(self):
+    def test_missing_kdotool_does_not_offer_partial_x11_scanning(self):
         with mock.patch.object(aw, "host_which", return_value=False), \
+             mock.patch.object(aw, "_kde_scan_supported", return_value=False), \
              mock.patch.object(aw, "_x11_scan_tools_available", return_value=True), \
              mock.patch.object(aw, "_scan_x11_game_windows", return_value=aw.WindowScan([], None)) as scan_x11, \
              mock.patch.dict(os.environ, {"DISPLAY": ":1"}):
-            self.assertTrue(aw.auto_start_scan_supported())
-            self.assertEqual(aw.scan_game_windows(), aw.WindowScan([], None))
-        scan_x11.assert_called_once_with()
+            self.assertFalse(aw.auto_start_scan_supported())
+            self.assertIsNone(aw.scan_game_windows())
+        scan_x11.assert_not_called()
 
-    def test_kde_scan_fallback_only_after_failure_with_display(self):
+    def test_native_kde_scan_never_falls_back_to_partial_x11_results(self):
         fallback = aw.WindowScan([{'process': 'cs2', 'class': 'cs2',
                                    'pid': 42, 'window_id': '0x1'}], '0x1')
         empty = aw.WindowScan([], None)
         cases = [
-            ('KDE fails, X11 succeeds', None, ':1', fallback, fallback, 1),
-            ('both fail', None, ':1', None, None, 1),
+            ('KDE fails, X11 succeeds', None, ':1', fallback, None, 0),
+            ('both fail', None, ':1', None, None, 0),
             ('no DISPLAY', None, '', fallback, None, 0),
             ('empty KDE is success', empty, ':1', fallback, empty, 0),
             ('nonempty KDE is success', fallback, ':1', empty, fallback, 0),
@@ -136,6 +142,11 @@ class X11WindowScanTests(unittest.TestCase):
         self.adapter_patch = mock.patch.object(aw, "_ADAPTER", aw._get_active_window_x11)
         self.adapter_patch.start()
         self.addCleanup(self.adapter_patch.stop)
+        patcher = mock.patch.dict(os.environ, {
+            'WAYLAND_DISPLAY': '', 'XDG_SESSION_TYPE': 'x11',
+        })
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_wmctrl_scan_canonicalizes_window_and_focused_ids(self):
         output = "0x0000000a  0 1234  Game.Class  title\n"

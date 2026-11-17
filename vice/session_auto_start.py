@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -18,12 +19,16 @@ log = logging.getLogger(__name__)
 
 STATE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "session_auto_start.json"
 _BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
-_STATE_VERSION = 1
+_STATE_VERSION = 2
 _BOOT_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 class AutoStartStateError(RuntimeError):
     """The auto-start suppression state could not be read or saved safely."""
+
+
+class MalformedAutoStartState(AutoStartStateError):
+    """State is structurally invalid, rather than inaccessible."""
 
 
 def read_host_boot_id() -> str:
@@ -62,21 +67,35 @@ class SuppressionStore:
         self.path = Path(path) if path is not None else STATE_PATH
 
     def load(self) -> set[ProcessIdentity]:
+        identities, _, _ = self.load_snapshot()
+        return identities
+
+    def load_snapshot(self) -> tuple[set[ProcessIdentity], bool, int]:
+        """Return identities, unresolved-stop intent, and source schema version."""
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return set()
+            return set(), False, _STATE_VERSION
         except UnicodeError as exc:
-            raise AutoStartStateError(f"Auto-start state is malformed: {exc}") from exc
+            raise MalformedAutoStartState(f"Auto-start state is malformed: {exc}") from exc
         except OSError as exc:
             raise AutoStartStateError(f"Could not read auto-start state: {exc}") from exc
 
         try:
             data = json.loads(raw)
-            if not isinstance(data, dict) or set(data) != {"version", "boot_id", "suppressed"}:
-                raise ValueError("state must contain version, boot_id, and suppressed")
-            if type(data["version"]) is not int or data["version"] != _STATE_VERSION:
+            if not isinstance(data, dict) or "version" not in data:
+                raise ValueError("state must be an object with a version")
+            version = data["version"]
+            if type(version) is not int or version not in (1, _STATE_VERSION):
                 raise ValueError("unsupported state version")
+            fields = {"version", "boot_id", "suppressed"}
+            if version == 2:
+                fields.add("pending")
+            if set(data) != fields:
+                raise ValueError("state contains unexpected or missing fields")
+            pending = data["pending"] if version == 2 else False
+            if type(pending) is not bool:
+                raise ValueError("pending must be a boolean")
             if (
                 not isinstance(data["boot_id"], str)
                 or not _BOOT_ID_RE.fullmatch(data["boot_id"])
@@ -92,13 +111,35 @@ class SuppressionStore:
                     raise ValueError("suppressed identity is invalid")
                 identities.add(ProcessIdentity(pid=pid, start_time=start_time))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise AutoStartStateError(f"Auto-start state is malformed: {exc}") from exc
+            raise MalformedAutoStartState(f"Auto-start state is malformed: {exc}") from exc
 
         if str(uuid.UUID(data["boot_id"])) != self.boot_id:
-            return set()
-        return identities
+            return set(), False, _STATE_VERSION
+        return identities, pending, version
 
-    def save(self, identities: set[ProcessIdentity]) -> None:
+    def backup_corrupt(self) -> Path:
+        """Preserve invalid bytes privately before replacing a malformed file."""
+        backup: Path | None = None
+        try:
+            fd, name = tempfile.mkstemp(
+                prefix=f".{self.path.name}.corrupt.", suffix=".bak",
+                dir=self.path.parent,
+            )
+            backup = Path(name)
+            with os.fdopen(fd, "wb") as output, self.path.open("rb") as source:
+                shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+            return backup
+        except OSError as exc:
+            if backup is not None:
+                try:
+                    backup.unlink(missing_ok=True)
+                except OSError:
+                    log.debug("Could not remove incomplete diagnostic backup", exc_info=True)
+            raise AutoStartStateError(f"Could not preserve malformed state: {exc}") from exc
+
+    def save(self, identities: set[ProcessIdentity], *, pending: bool = False) -> None:
         if not isinstance(identities, set) or any(
             not isinstance(item, ProcessIdentity)
             or type(item.pid) is not int
@@ -108,9 +149,12 @@ class SuppressionStore:
             for item in identities
         ):
             raise AutoStartStateError("Cannot save malformed auto-start identities")
+        if type(pending) is not bool:
+            raise AutoStartStateError("Cannot save malformed pending state")
 
         payload = {
             "version": _STATE_VERSION,
+            "pending": pending,
             "boot_id": self.boot_id,
             "suppressed": [
                 {"pid": item.pid, "start_time": item.start_time}
