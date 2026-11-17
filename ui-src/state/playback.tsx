@@ -169,6 +169,15 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [fail, say],
   );
 
+  const newShareLink = useCallback(
+    (clip: Clip) =>
+      void api
+        .newShareLink(clip.slug)
+        .then(() => say(t('viewer.shareNewLinkDone'), t('viewer.shareNewLinkDoneDetail')))
+        .catch(fail(t('viewer.errShareNewLink'))),
+    [fail, say],
+  );
+
   const value = useMemo<Playback>(
     () => ({openViewer, openTrim, openShare: setShareSlug}),
     [openViewer, openTrim],
@@ -202,6 +211,7 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         onClose={() => setShareSlug(null)}
         onCopyLink={copyLink}
         onCopyFile={copyDiscordFile}
+        onNewLink={newShareLink}
       />
 
       <TrimModal

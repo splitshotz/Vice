@@ -1235,6 +1235,7 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
+        r.add_post("/api/clips/{slug}/share-link",        self._api_new_share_link)
         r.add_get("/api/clips/{slug}/discord",            self._api_discord_copy)
         r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
         r.add_get("/api/clips/{slug}/audio/{index}",      self._audio_track)
@@ -2332,6 +2333,16 @@ class ShareServer:
         state.update(body)
         _save_app_state(state)
         return web.json_response({"ok": True})
+
+    async def _api_new_share_link(self, req: web.Request) -> web.Response:
+        """Give the clip a new share link. The old one stops working, which
+        is the point: it is how a link that got around is taken back (#213)."""
+        slug = req.match_info["slug"]
+        if slug not in self._clips:
+            raise web.HTTPNotFound()
+        self._issue_share_token(slug)
+        await self._broadcast_share_links()
+        return web.json_response({"ok": True, "share_url": self.share_url(slug)})
 
     async def _api_copy_file(self, req: web.Request) -> web.Response:
         """Put the clip file itself on the clipboard so it can be pasted

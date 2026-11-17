@@ -80,6 +80,9 @@ export const api = {
     );
     if (result?.ok === false) throw new Error(result.error);
   },
+  /** Replaces the clip's share link; the old one stops working. */
+  newShareLink: (slug: string) =>
+    post<{ok?: boolean; share_url: string}>(`/api/clips/${enc(slug)}/share-link`),
   /**
    * Build (or reuse) a Discord-sized copy of the clip and return where it is.
    * Slow the first time: it transcodes.

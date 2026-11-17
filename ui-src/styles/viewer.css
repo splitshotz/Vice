@@ -955,6 +955,14 @@ kbd {
   gap: 6px;
 }
 
+.share-link-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  min-height: 28px;
+}
+
 .share-label {
   font-size: 11px;
   font-weight: 600;

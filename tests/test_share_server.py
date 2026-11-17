@@ -3307,6 +3307,33 @@ class ShareTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(_share_token(self.server, "Vice_Clip_3"), old)
         self.assertEqual(await self._status(f"{self.public}/c/{old}"), 404)
 
+    async def test_a_new_link_stops_the_old_one_and_only_that_clips(self) -> None:
+        old = _share_token(self.server, "Vice_Clip_1")
+        other = _share_token(self.server, "Vice_Clip_2")
+        async with self.client.post(f"{self.local}/api/clips/Vice_Clip_1/share-link") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+        fresh = payload["share_url"].rsplit("/c/", 1)[1]
+        self.assertNotEqual(fresh, old)
+        for kind in ("c", "v", "t"):
+            self.assertEqual(await self._status(f"{self.public}/{kind}/{old}"), 404, kind)
+        self.assertEqual(await self._status(f"{self.public}/c/{fresh}"), 200)
+        self.assertEqual(await self._status(f"{self.public}/c/{other}"), 200)
+        # Kept across a restart: the old link stays dead.
+        self.assertEqual(json.loads(self.tokens_path.read_text())["Vice_Clip_1"], fresh)
+        async with self.client.get(f"{self.local}/api/clips") as resp:
+            clips = await resp.json()
+        clips = clips if isinstance(clips, list) else clips["clips"]
+        mine = next(c for c in clips if c["slug"] == "Vice_Clip_1")
+        self.assertTrue(mine["share_url"].endswith(f"/c/{fresh}"))
+
+    async def test_a_new_link_for_a_missing_clip_is_refused(self) -> None:
+        async with self.client.post(f"{self.local}/api/clips/nope/share-link") as resp:
+            self.assertEqual(resp.status, 404)
+        # The public server has no such route at all.
+        async with self.client.post(f"{self.public}/api/clips/Vice_Clip_1/share-link") as resp:
+            self.assertEqual(resp.status, 404)
+
     async def test_the_token_file_is_readable_by_its_owner_only(self) -> None:
         self.assertEqual(self.tokens_path.stat().st_mode & 0o777, 0o600)
 
