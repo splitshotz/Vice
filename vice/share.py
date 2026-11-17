@@ -1276,6 +1276,7 @@ class ShareServer:
         r.add_post("/api/trigger",             self._api_trigger)
         r.add_post("/api/quit",                self._api_quit)
         r.add_post("/api/sounds/preview",      self._api_preview_sound)
+        r.add_post("/api/sounds/try",          self._api_try_sound)
         r.add_post("/api/uninstall",           self._api_uninstall)
 
         # WebSocket
@@ -3192,6 +3193,20 @@ class ShareServer:
             return web.json_response({"ok": False, "error": "unknown sound pack"}, status=400)
         audio.preview(str(body.get("sound") or "clip"), self.cfg.notifications.sound_volume, pack)
         return web.json_response({"ok": True})
+
+    async def _api_try_sound(self, req: web.Request) -> web.Response:
+        """Play a custom sound file from Settings before it is saved, and say
+        why when it will not play (#297)."""
+        from . import audio
+        try:
+            body = await req.json()
+        except ValueError:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        path = body.get("path") if isinstance(body, dict) else None
+        if not isinstance(path, str) or len(path) > 4096:
+            return web.json_response({"ok": False, "error": "expected a path"}, status=400)
+        problem = await audio.try_custom(path)
+        return web.json_response({"ok": not problem, "problem": problem})
 
     async def _api_quit(self, _: web.Request) -> web.Response:
         """Stop the daemon (browser-mode quit, native window uses pywebview API)."""

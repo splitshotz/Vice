@@ -66,6 +66,8 @@ export const api = {
   setClipGame: (slug: string, game: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/game`, {game}),
   matugen: () => request<{colors: Record<string, string> | null}>('/api/theme/matugen'),
   previewSound: (pack: string, sound = 'clip') => post<{ok: boolean}>('/api/sounds/preview', {pack, sound}),
+  /** Plays the user's own sound file; `problem` says why it did not play. */
+  trySound: (path: string) => post<{ok: boolean; problem: string}>('/api/sounds/try', {path}),
   prepareClipPreview: (slug: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/prepare-preview`),
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),

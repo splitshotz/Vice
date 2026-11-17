@@ -461,6 +461,33 @@ def play_screenshot(volume: float = 1.0, custom: Optional[str] = None,
     _fire("screenshot", volume, custom, pack)
 
 
+async def try_custom(custom: str) -> str:
+    """Play the user's own file now, for the test button in Settings.
+
+    Returns "" when it played, otherwise why not, as one of "empty",
+    "missing", "unreadable", "unplayable" or "no-player", so the UI can say
+    it in the user's language instead of pointing them at a log (#297).
+    """
+    if not str(custom or "").strip():
+        return "empty"
+    player = _find_player()
+    if not player:
+        return "no-player"
+    path = Path(os.path.expanduser(_pasted_path(str(custom))))
+    try:
+        if not path.exists():
+            return "missing"
+        if not path.is_file() or not os.access(path, os.R_OK) or path.stat().st_size == 0:
+            return "unreadable"
+    except OSError:
+        return "unreadable"
+    # A file that failed before is worth another look when the user asks.
+    key = _custom_key(path)
+    if key is not None and _converted.get(key, "") is None:
+        del _converted[key]
+    return "" if await _play_custom(player, path) else "unplayable"
+
+
 def preview(name: str, volume: float, pack: str) -> None:
     """Play one sound of a pack, for choosing one in Settings."""
     if name in _SPECS:

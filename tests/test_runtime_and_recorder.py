@@ -4331,6 +4331,26 @@ class CustomSoundPlaybackTests(unittest.IsolatedAsyncioTestCase):
             await audio_mod._play("clip", 1.0, str(self.custom))
         self.assertIn("snd_clip_", self.played.read_text().splitlines()[-1])
 
+    async def test_the_settings_test_button_says_why_a_file_will_not_play(self) -> None:
+        good = self.dir / "good.wav"
+        with wave.open(str(good), "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+            w.writeframes(b"\0" * 4800)
+        self.assertEqual(await audio_mod.try_custom(str(good)), "")
+        self.assertEqual(await audio_mod.try_custom(f"'{good}'"), "")
+        self.assertEqual(await audio_mod.try_custom(f"file://{good}"), "")
+        self.assertEqual(await audio_mod.try_custom(str(self.dir / "nope.wav")), "missing")
+        self.assertEqual(await audio_mod.try_custom(str(self.dir)), "unreadable")
+        self.assertEqual(await audio_mod.try_custom("   "), "empty")
+        with self.assertLogs("vice.audio", level="WARNING"):
+            self.assertEqual(await audio_mod.try_custom(str(self.custom)), "unplayable")
+        # Asking again looks again, instead of trusting the earlier failure.
+        with self.assertLogs("vice.audio", level="WARNING"):
+            self.assertEqual(await audio_mod.try_custom(str(self.custom)), "unplayable")
+        self.assertEqual(self.played.read_text().splitlines().count(str(self.custom)), 2)
+        with mock.patch("vice.audio._find_player", return_value=None):
+            self.assertEqual(await audio_mod.try_custom(str(good)), "no-player")
+
     async def test_a_tone_that_fails_is_not_retried(self) -> None:
         with mock.patch("vice.audio._wav_for", return_value=b"tone"):
             player = self.dir / "failing"

@@ -859,6 +859,14 @@
     "volumeOff": "Off",
     "customSounds": "Custom sounds",
     "customSoundsHelp": "Use your own sound files. Leave one empty to keep the built-in sound.",
+    "soundPlayAria": "Play {name}",
+    "soundProblem": {
+      "missing": "There is no file at that path.",
+      "unreadable": "Vice can't read that file.",
+      "unplayable": "That file isn't a sound Vice can play.",
+      "no-player": "No sound player is installed.",
+      "empty": "Paste the path to a sound file."
+    },
     "soundClip": "Clip saved",
     "soundClipFailed": "Clip failed",
     "soundSessionStart": "Session started",
