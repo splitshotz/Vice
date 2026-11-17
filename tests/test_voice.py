@@ -236,3 +236,52 @@ class VoiceListenerTests(unittest.TestCase):
                         listener._listen_loop()
 
         self.assertEqual(len(triggered), 0)
+
+
+class SpokenClipLengthTests(unittest.TestCase):
+    """ "Clip last thirty seconds" saves that much instead of the default (#302)."""
+
+    def test_lengths_are_read_the_way_the_recogniser_writes_them(self) -> None:
+        from vice.voice import match_clip_length
+        for text, seconds in (
+            ("clip last thirty seconds", 30),
+            ("clip the last fifteen seconds", 15),
+            ("vice clip last minute", 60),
+            ("clip last a minute", 60),
+            ("clip last two minutes", 120),
+            ("hey vice clip the last forty five seconds please", 45),
+            ("clip last one hundred twenty seconds", 120),
+            ("clip last one hundred and five seconds", 105),
+            ("clip last 30 seconds", 30),
+        ):
+            self.assertEqual(match_clip_length(text), seconds, text)
+
+    def test_ordinary_speech_is_not_a_command(self) -> None:
+        from vice.voice import match_clip_length
+        for text in (
+            "clip that",
+            "clip last",
+            "clip last night",
+            "i watched a clip last night",
+            "i saw a clip last week for thirty seconds or so and",
+            "so i told him clip last ten seconds",
+            "clip last twenty thirty seconds",
+            "clip last hundred seconds",
+            "clip the last minute and a half",
+            "",
+        ):
+            self.assertIsNone(match_clip_length(text), text)
+
+    def test_an_unsure_word_does_not_trigger(self) -> None:
+        from vice.voice import match_clip_length
+        words = [{"word": w, "conf": 0.9} for w in "clip last thirty seconds".split()]
+        self.assertEqual(match_clip_length("clip last thirty seconds", words, 0.5), 30)
+        words[2]["conf"] = 0.2
+        self.assertIsNone(match_clip_length("clip last thirty seconds", words, 0.5))
+
+    def test_the_length_reaches_the_clip_handler_and_plain_phrases_stay_bare(self) -> None:
+        calls = []
+        listener = VoiceListener(on_trigger=lambda *args: calls.append(args))
+        listener._dispatch_trigger("clip last 30s", 30)
+        listener._dispatch_trigger("clip that")
+        self.assertEqual(calls, [(30,), ()])

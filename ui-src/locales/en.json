@@ -877,7 +877,7 @@
     "wfMicChoiceMic": "Microphone only",
     "wfMicChoiceMicBody": "Desktop audio is dropped while the microphone is on.",
     "voiceClipping": "Voice clipping",
-    "voiceClippingHelp": "Listen on the microphone for 'Vice, clip that' or 'Clip that' to save a clip hands-free.",
+    "voiceClippingHelp": "Say \"Vice, clip that\" to save a clip, or \"Clip last 30 seconds\" for a set length.",
     "voiceCustomPhrase": "Custom trigger phrase",
     "voiceCustomPhraseHelp": "Optional extra phrase in addition to the defaults (e.g. 'Record that').",
     "voiceCustomPhrasePlaceholder": "Record that",

@@ -154,6 +154,7 @@ The Flatpak also works on any other distro with Flatpak installed.
 |---|---|
 | **F9** | Save the last 20 s |
 | **"Vice, clip that"** | Save a clip hands-free (Settings → Audio → Voice clipping) |
+| **"Clip last 30 seconds"** | Save a clip of the length you say, in seconds or minutes |
 | **Extra clip keys** | Save their own duration, e.g. F6 for 60 s (Settings → Hotkeys) |
 | **Key combos** | Rebind to a modifier combo like **Alt + F9** (Settings → Hotkeys) |
 | **F9 · F9** (double-tap) | Start / stop a session recording |
@@ -307,7 +308,7 @@ Voice clipping runs completely offline using [Vosk](https://alphacephei.com/vosk
    unzip vosk-model-small-en-us-0.15.zip -d ~/.local/share/vice/models/
    rm vosk-model-small-en-us-0.15.zip
    ```
-3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set.
+3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set. **"Clip last 30 seconds"** or **"Clip the last two minutes"** saves that length instead of your usual one.
 
 ### Matugen colours
 
