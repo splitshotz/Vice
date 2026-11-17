@@ -56,7 +56,7 @@ from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
                        _is_nvidia, filename_tag, list_display_options,
                        list_gsr_audio_sources, next_image_path,
                        slugify_clip_name)
-from .runtime import actual_home_dir, load_user_systemd_env, resolve_path
+from .runtime import actual_home_dir, load_user_systemd_env, resolve_path, session_launch_env
 
 log = logging.getLogger("vice.share")
 
@@ -675,12 +675,15 @@ async def _xdg_open(target: Path) -> None:
     The daemon can outlive the environment it started with, so the desktop's
     variables are refreshed from the session first. xdg-open picks its opener
     from them, and on Plasma a missing KDE_SESSION_VERSION sends it to a
-    kfmclient that no longer exists (#252).
+    kfmclient that no longer exists (#252). It also needs the session's
+    search paths to find the file manager and start it (#283).
     """
     try:
         await asyncio.to_thread(load_user_systemd_env)
+        env = await asyncio.to_thread(session_launch_env)
         proc = await asyncio.create_subprocess_exec(
             "xdg-open", str(target),
+            env=env,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )

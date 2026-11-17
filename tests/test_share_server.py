@@ -3394,6 +3394,44 @@ class XdgOpenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target, self.tmp.name)
         self.assertEqual(version, "6")
 
+    async def test_the_sessions_search_paths_reach_the_opener(self) -> None:
+        # A service started before the compositor exported them, or wrapped
+        # with its own, has no way to find the file manager (#283).
+        import os
+        root = Path(self.tmp.name)
+        seen = root / "paths.txt"
+        (root / "bin" / "xdg-open").write_text(
+            f'#!/bin/sh\nprintf "%s\\n%s\\n%s\\n" "$PATH" "$XDG_DATA_DIRS" "$XDG_CONFIG_DIRS" > "{seen}"\n')
+        ours = os.environ["PATH"]
+        os.environ["XDG_DATA_DIRS"] = "/wrapper/share"
+        os.environ.pop("XDG_CONFIG_DIRS", None)
+        session = {
+            "PATH": f"/usr/bin:/run/current-system/sw/bin",
+            "XDG_DATA_DIRS": "/wrapper/share:/run/current-system/sw/share",
+            "XDG_CONFIG_DIRS": "/etc/xdg",
+        }
+        with mock.patch("vice.runtime.user_systemd_env_snapshot",
+                        side_effect=lambda keys=None: session if keys else {}):
+            await _share._xdg_open(root)
+        path, data_dirs, config_dirs = seen.read_text().splitlines()
+        self.assertEqual(path, f"{ours}:/run/current-system/sw/bin")
+        self.assertEqual(data_dirs, "/wrapper/share:/run/current-system/sw/share")
+        self.assertEqual(config_dirs, "/etc/xdg")
+        # The daemon's own environment is left as it was.
+        self.assertEqual(os.environ["PATH"], ours)
+        self.assertEqual(os.environ["XDG_DATA_DIRS"], "/wrapper/share")
+
+    async def test_without_a_session_answer_the_environment_is_passed_as_is(self) -> None:
+        import os
+        root = Path(self.tmp.name)
+        seen = root / "paths.txt"
+        (root / "bin" / "xdg-open").write_text(
+            f'#!/bin/sh\nprintf "%s\\n[%s]\\n" "$PATH" "${{XDG_DATA_DIRS-unset}}" > "{seen}"\n')
+        os.environ.pop("XDG_DATA_DIRS", None)
+        with mock.patch("vice.runtime.user_systemd_env_snapshot", return_value={}):
+            await _share._xdg_open(root)
+        self.assertEqual(seen.read_text().splitlines(), [os.environ["PATH"], "[unset]"])
+
     async def test_a_failing_opener_is_logged(self) -> None:
         import os
         os.environ["FAKE_RC"] = "4"
