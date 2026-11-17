@@ -1030,6 +1030,50 @@ class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first, again)
             self.assertEqual(len(captured), 1)
 
+    async def test_a_larger_cap_spends_more_bits_and_keeps_its_own_copy(self) -> None:
+        """#308: Nitro accounts upload more than 20 MB, and a copy made for
+        one cap must not be handed out for another."""
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                free = await share_mod._make_discord_copy(src, 120)
+                basic = await share_mod._make_discord_copy(src, 120, max_mb=50)
+                again = await share_mod._make_discord_copy(src, 120, max_mb=50)
+            self.assertNotEqual(free, basic)
+            self.assertEqual(basic, again)
+            self.assertEqual(len(captured), 2)
+            self.assertGreater(self._kbps(captured[1]), self._kbps(captured[0]) * 2)
+            self.assertLess((self._kbps(captured[1]) + 128) * 120 / 8192, 50)
+            # Deleting the clip takes every copy with it.
+            share_mod._purge_clip_discord(src)
+            self.assertFalse(free.exists() or basic.exists())
+
+    async def test_a_clip_too_long_for_the_free_cap_fits_a_larger_one(self) -> None:
+        import vice.share as share_mod
+        from vice.editor import DiscordTooLarge
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg([])):
+                with self.assertRaises(DiscordTooLarge) as caught:
+                    await share_mod._make_discord_copy(src, 1800)
+                self.assertIn("20 MB", str(caught.exception))
+                self.assertIsNotNone(await share_mod._make_discord_copy(src, 1800, max_mb=500))
+
+    def test_an_unknown_size_falls_back_to_the_free_cap(self) -> None:
+        from vice.config import Config, normalize_sharing
+        cfg = Config()
+        self.assertEqual(cfg.sharing.discord_max_mb, 20)
+        for value, expected in ((50, 50), (500, 500), ("50", 50), (37, 20), (0, 20), ("big", 20), (None, 20)):
+            cfg.sharing.discord_max_mb = value
+            normalize_sharing(cfg)
+            self.assertEqual(cfg.sharing.discord_max_mb, expected, value)
+
     def test_purge_removes_the_cached_copy(self) -> None:
         import vice.share as share_mod
         with tempfile.TemporaryDirectory() as tmp:
@@ -3263,6 +3307,33 @@ class ShareTokenTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(_share_token(self.server, "Vice_Clip_3"), old)
         self.assertEqual(await self._status(f"{self.public}/c/{old}"), 404)
 
+    async def test_a_new_link_stops_the_old_one_and_only_that_clips(self) -> None:
+        old = _share_token(self.server, "Vice_Clip_1")
+        other = _share_token(self.server, "Vice_Clip_2")
+        async with self.client.post(f"{self.local}/api/clips/Vice_Clip_1/share-link") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+        fresh = payload["share_url"].rsplit("/c/", 1)[1]
+        self.assertNotEqual(fresh, old)
+        for kind in ("c", "v", "t"):
+            self.assertEqual(await self._status(f"{self.public}/{kind}/{old}"), 404, kind)
+        self.assertEqual(await self._status(f"{self.public}/c/{fresh}"), 200)
+        self.assertEqual(await self._status(f"{self.public}/c/{other}"), 200)
+        # Kept across a restart: the old link stays dead.
+        self.assertEqual(json.loads(self.tokens_path.read_text())["Vice_Clip_1"], fresh)
+        async with self.client.get(f"{self.local}/api/clips") as resp:
+            clips = await resp.json()
+        clips = clips if isinstance(clips, list) else clips["clips"]
+        mine = next(c for c in clips if c["slug"] == "Vice_Clip_1")
+        self.assertTrue(mine["share_url"].endswith(f"/c/{fresh}"))
+
+    async def test_a_new_link_for_a_missing_clip_is_refused(self) -> None:
+        async with self.client.post(f"{self.local}/api/clips/nope/share-link") as resp:
+            self.assertEqual(resp.status, 404)
+        # The public server has no such route at all.
+        async with self.client.post(f"{self.public}/api/clips/Vice_Clip_1/share-link") as resp:
+            self.assertEqual(resp.status, 404)
+
     async def test_the_token_file_is_readable_by_its_owner_only(self) -> None:
         self.assertEqual(self.tokens_path.stat().st_mode & 0o777, 0o600)
 
@@ -3393,6 +3464,44 @@ class XdgOpenTests(unittest.IsolatedAsyncioTestCase):
         target, version = self.record.read_text().splitlines()
         self.assertEqual(target, self.tmp.name)
         self.assertEqual(version, "6")
+
+    async def test_the_sessions_search_paths_reach_the_opener(self) -> None:
+        # A service started before the compositor exported them, or wrapped
+        # with its own, has no way to find the file manager (#283).
+        import os
+        root = Path(self.tmp.name)
+        seen = root / "paths.txt"
+        (root / "bin" / "xdg-open").write_text(
+            f'#!/bin/sh\nprintf "%s\\n%s\\n%s\\n" "$PATH" "$XDG_DATA_DIRS" "$XDG_CONFIG_DIRS" > "{seen}"\n')
+        ours = os.environ["PATH"]
+        os.environ["XDG_DATA_DIRS"] = "/wrapper/share"
+        os.environ.pop("XDG_CONFIG_DIRS", None)
+        session = {
+            "PATH": f"/usr/bin:/run/current-system/sw/bin",
+            "XDG_DATA_DIRS": "/wrapper/share:/run/current-system/sw/share",
+            "XDG_CONFIG_DIRS": "/etc/xdg",
+        }
+        with mock.patch("vice.runtime.user_systemd_env_snapshot",
+                        side_effect=lambda keys=None: session if keys else {}):
+            await _share._xdg_open(root)
+        path, data_dirs, config_dirs = seen.read_text().splitlines()
+        self.assertEqual(path, f"{ours}:/run/current-system/sw/bin")
+        self.assertEqual(data_dirs, "/wrapper/share:/run/current-system/sw/share")
+        self.assertEqual(config_dirs, "/etc/xdg")
+        # The daemon's own environment is left as it was.
+        self.assertEqual(os.environ["PATH"], ours)
+        self.assertEqual(os.environ["XDG_DATA_DIRS"], "/wrapper/share")
+
+    async def test_without_a_session_answer_the_environment_is_passed_as_is(self) -> None:
+        import os
+        root = Path(self.tmp.name)
+        seen = root / "paths.txt"
+        (root / "bin" / "xdg-open").write_text(
+            f'#!/bin/sh\nprintf "%s\\n[%s]\\n" "$PATH" "${{XDG_DATA_DIRS-unset}}" > "{seen}"\n')
+        os.environ.pop("XDG_DATA_DIRS", None)
+        with mock.patch("vice.runtime.user_systemd_env_snapshot", return_value={}):
+            await _share._xdg_open(root)
+        self.assertEqual(seen.read_text().splitlines(), [os.environ["PATH"], "[unset]"])
 
     async def test_a_failing_opener_is_logged(self) -> None:
         import os

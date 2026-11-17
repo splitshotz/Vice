@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import wave
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -4276,6 +4277,7 @@ class CustomSoundPlaybackTests(unittest.IsolatedAsyncioTestCase):
         for target, value in (
             ("vice.audio._find_player", mock.Mock(return_value=str(player))),
             ("vice.audio._TMP_DIR", self.dir / "tones"),
+            ("vice.audio._converted", {}),
         ):
             patcher = mock.patch(target, value)
             patcher.start()
@@ -4289,6 +4291,65 @@ class CustomSoundPlaybackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(lines), 2)
         self.assertIn("snd_clip_", lines[1])
         self.assertIn("Failed to open audio file", "\n".join(logs.output))
+
+    async def test_a_file_that_cannot_be_used_is_only_tried_once(self) -> None:
+        with self.assertLogs("vice.audio", level="WARNING"):
+            await audio_mod._play("clip", 1.0, str(self.custom))
+        await audio_mod._play("clip", 1.0, str(self.custom))
+        lines = self.played.read_text().splitlines()
+        self.assertEqual(lines.count(str(self.custom)), 1)
+        self.assertEqual(len(lines), 3)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    async def test_a_file_the_player_cannot_read_is_converted_and_played(self) -> None:
+        # AAC saved with a .wav name: what paplay answers "Failed to open
+        # audio file." to (#297).
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=600:d=0.3",
+             "-c:a", "aac", "-f", "mp4", str(self.custom)], check=True)
+        with self.assertLogs("vice.audio", level="INFO") as logs:
+            await audio_mod._play("clip", 1.0, str(self.custom))
+        lines = self.played.read_text().splitlines()
+        self.assertEqual(lines[0], str(self.custom))
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("snd_custom_", lines[1])
+        with wave.open(lines[1]) as converted:
+            self.assertEqual(
+                (converted.getnchannels(), converted.getframerate(), converted.getsampwidth()),
+                (2, 48000, 2))
+            self.assertGreater(converted.getnframes(), 48000 * 0.2)
+        self.assertIn("converted copy", "\n".join(logs.output))
+        self.assertNotIn("WARNING", "\n".join(logs.output))
+
+        # Next time the copy plays straight away.
+        await audio_mod._play("clip", 1.0, str(self.custom))
+        self.assertEqual(self.played.read_text().splitlines()[2], lines[1])
+
+        # A changed file is looked at again.
+        self.custom.write_bytes(b"not really audio any more")
+        with self.assertLogs("vice.audio", level="WARNING"):
+            await audio_mod._play("clip", 1.0, str(self.custom))
+        self.assertIn("snd_clip_", self.played.read_text().splitlines()[-1])
+
+    async def test_the_settings_test_button_says_why_a_file_will_not_play(self) -> None:
+        good = self.dir / "good.wav"
+        with wave.open(str(good), "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+            w.writeframes(b"\0" * 4800)
+        self.assertEqual(await audio_mod.try_custom(str(good)), "")
+        self.assertEqual(await audio_mod.try_custom(f"'{good}'"), "")
+        self.assertEqual(await audio_mod.try_custom(f"file://{good}"), "")
+        self.assertEqual(await audio_mod.try_custom(str(self.dir / "nope.wav")), "missing")
+        self.assertEqual(await audio_mod.try_custom(str(self.dir)), "unreadable")
+        self.assertEqual(await audio_mod.try_custom("   "), "empty")
+        with self.assertLogs("vice.audio", level="WARNING"):
+            self.assertEqual(await audio_mod.try_custom(str(self.custom)), "unplayable")
+        # Asking again looks again, instead of trusting the earlier failure.
+        with self.assertLogs("vice.audio", level="WARNING"):
+            self.assertEqual(await audio_mod.try_custom(str(self.custom)), "unplayable")
+        self.assertEqual(self.played.read_text().splitlines().count(str(self.custom)), 2)
+        with mock.patch("vice.audio._find_player", return_value=None):
+            self.assertEqual(await audio_mod.try_custom(str(good)), "no-player")
 
     async def test_a_tone_that_fails_is_not_retried(self) -> None:
         with mock.patch("vice.audio._wav_for", return_value=b"tone"):

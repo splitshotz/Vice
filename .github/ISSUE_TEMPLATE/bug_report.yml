@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Vice is broken or behaves wrongly
+labels: ["bug"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before you post
+      options:
+        - label: I searched the open and closed issues and this is not already reported.
+          required: true
+        - label: I am on the latest release (About shows the version).
+          required: false
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Vice did instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Vice is installed
+      options:
+        - AUR (vice-clipper)
+        - install.sh
+        - Flatpak
+        - Nix
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of vice doctor
+      description: Run `vice doctor` in a terminal and paste everything it prints. On the Flatpak, `flatpak run --command=vice io.github.splitshotz.Vice doctor`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a clip that shows it, or lines from ~/.local/share/vice/vice.log.

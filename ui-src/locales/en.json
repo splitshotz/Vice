@@ -122,7 +122,7 @@
     "copyLinkTitle": "Copy this link",
     "copyLinkBody": "The clipboard was not available, so here is the link to copy by hand.",
     "restartTitle": "Restart Vice to finish",
-    "restartBody": "That setting is saved, but it only takes effect once the daemon restarts.",
+    "restartBody": "That setting is saved. It takes effect when Vice restarts.",
     "gotIt": "Got it"
   },
   "card": {
@@ -166,7 +166,7 @@
     "shareTitle": "{action}. Right-click for more ways to share",
     "discordPreparing": "Making a Discord-sized copy",
     "discordCopied": "Copied for Discord",
-    "discordCopiedDetail": "Paste it into a Discord message. It fits the free upload limit.",
+    "discordCopiedDetail": "Paste it into a Discord message.",
     "errDiscordCopy": "Could not copy the clip for Discord",
     "setGame": "Set game",
     "previewPrepare": "Prepare preview",
@@ -188,7 +188,7 @@
     "colour": "Playlist colour"
   },
   "frame": {
-    "quitConfirm": "Stop Vice and quit? The recording daemon will shut down.",
+    "quitConfirm": "Quit Vice? Recording stops until you open it again.",
     "minimize": "Minimize",
     "quit": "Quit"
   },
@@ -206,7 +206,7 @@
     "nvencGetFlatpak": "The Flatpak gpu-screen-recorder works with this driver. Install it with {command}, then choose it under Settings, Recording."
   },
   "island": {
-    "cannotReach": "Cannot reach the daemon",
+    "cannotReach": "Vice isn't responding",
     "notRecording": "Not recording",
     "keepsRetrying": "Vice keeps retrying",
     "sessionRecording": "Session recording",
@@ -291,9 +291,9 @@
     "errMoveHighlight": "Could not move the highlight",
     "errUpdateHighlight": "Could not update the highlight",
     "errDeleteHighlight": "Could not delete the highlight",
-    "daemonNoMark": "The daemon did not return the mark",
-    "daemonRejectedMove": "The daemon rejected the move",
-    "daemonRejectedChange": "The daemon rejected the change",
+    "daemonNoMark": "The highlight wasn't saved",
+    "daemonRejectedMove": "The highlight wasn't moved",
+    "daemonRejectedChange": "The change wasn't saved",
     "play": "Play",
     "pause": "Pause",
     "preparingPreview": "Preparing the H.265 preview",
@@ -335,6 +335,11 @@
     "sharePreparing": "Sizing a copy for Discord…",
     "shareDragFailed": "Could not prepare the Discord copy",
     "shareCopyFile": "Copy the file",
+    "shareNewLink": "New link",
+    "shareNewLinkConfirm": "Stop the old link?",
+    "shareNewLinkDone": "New link ready",
+    "shareNewLinkDoneDetail": "The old link no longer works.",
+    "errShareNewLink": "Could not make a new link",
     "shareDiscordSize": "Discord ready · {size}",
     "reveal": "Reveal",
     "delete": "Delete",
@@ -468,7 +473,7 @@
     "linkTitle": "Copy link",
     "linkHelp": "Copies a link that plays the clip in a browser. Paste it into Discord and it embeds.",
     "tunnelTitle": "Local, or reachable from anywhere",
-    "tunnelHelp": "On its own the link only works on this machine. Turn on the Cloudflare tunnel in Settings and it works anywhere, until the daemon restarts and the address changes.",
+    "tunnelHelp": "Without Public link it only works on your home network. Turn Public link on in Settings and it works anywhere, until Vice restarts and the address changes.",
     "badgeLink": "Link",
     "badgeTunnel": "Net",
     "moreTitle": "The rest lives in Settings",
@@ -593,7 +598,7 @@
     "customPath": "Custom path",
     "alsoAddToLibrary": "Also add to the Vice library",
     "exportKeys": "Show the keys pressed",
-    "discordOptimize": "Optimize for Discord (under 20 MB)",
+    "discordOptimize": "Optimize for Discord (under {mb} MB)",
     "encoding": "Encoding H.264. You can leave this open or carry on elsewhere in Vice.",
     "videoTrack": "Video track",
     "audioTrack": "Audio track",
@@ -706,7 +711,7 @@
     "detachedTracksHelp": "Each recorded source has its own lane. Only track 1 starts enabled, so a combined track is not mixed twice. Unmute the sources you want to hear.",
     "preparingMedia": "Preparing preview",
     "exportSummary": "{seconds}s · {format} into {path}",
-    "exportFormatDiscord": "Discord-optimized (under 20 MB)",
+    "exportFormatDiscord": "Discord-optimized (under {mb} MB)",
     "exportFormatDefault": "H.264 and AAC",
     "exportFolderUnpicked": "a folder you pick"
   },
@@ -866,6 +871,14 @@
     "volumeOff": "Off",
     "customSounds": "Custom sounds",
     "customSoundsHelp": "Use your own sound files. Leave one empty to keep the built-in sound.",
+    "soundPlayAria": "Play {name}",
+    "soundProblem": {
+      "missing": "There is no file at that path.",
+      "unreadable": "Vice can't read that file.",
+      "unplayable": "That file isn't a sound Vice can play.",
+      "no-player": "No sound player is installed.",
+      "empty": "Paste the path to a sound file."
+    },
     "soundClip": "Clip saved",
     "soundClipFailed": "Clip failed",
     "soundSessionStart": "Session started",
@@ -889,7 +902,7 @@
     "wfMicChoiceMic": "Microphone only",
     "wfMicChoiceMicBody": "Desktop audio is dropped while the microphone is on.",
     "voiceClipping": "Voice clipping",
-    "voiceClippingHelp": "Listen on the microphone for 'Vice, clip that' or 'Clip that' to save a clip hands-free.",
+    "voiceClippingHelp": "Say \"Vice, clip that\" to save a clip, or \"Clip last 30 seconds\" for a set length.",
     "voiceCustomPhrase": "Custom trigger phrase",
     "voiceCustomPhraseHelp": "Optional extra phrase in addition to the defaults (e.g. 'Record that').",
     "voiceCustomPhrasePlaceholder": "Record that",
@@ -985,6 +998,11 @@
     "soundScreenshot": "Screenshot",
     "shareDiscordFile": "Share copies a Discord file",
     "shareDiscordFileHelp": "On: Share copies the clip itself, sized for Discord. Off: it copies the link. Right-click Share for the other one.",
+    "discordMaxMb": "Discord copy size",
+    "discordMaxMbHelp": "The largest file your Discord account can upload.",
+    "discordSizeFree": "20 MB (free)",
+    "discordSizeBasic": "50 MB (Nitro Basic)",
+    "discordSizeNitro": "500 MB (Nitro)",
     "keyOverlayKeys": "Keys on the panel",
     "keyOverlayKeysHelp": "Click a key to take it off the panel.",
     "keySpace": "Space"
@@ -993,6 +1011,24 @@
     "title": "What's new in Vice {version}",
     "close": "Got it",
     "thanks": "Thanks to {names} for their work on this release.",
+    "v2_19_0": {
+      "soundTest": {
+        "title": "Test your own sounds",
+        "body": "Each custom sound under Settings, Audio has a play button, and says why a file won't play."
+      },
+      "voiceLength": {
+        "title": "Say how long",
+        "body": "With voice clipping on, \"Vice, clip last 30 seconds\" saves that length."
+      },
+      "discordSize": {
+        "title": "Discord copies for Nitro",
+        "body": "Pick 50 or 500 MB under Settings, Sharing."
+      },
+      "newLink": {
+        "title": "Take a link back",
+        "body": "New link in the share sheet stops the old one working."
+      }
+    },
     "v2_18_0": {
       "soundPacks": {
         "title": "New sounds",

@@ -155,7 +155,9 @@ class FlatpakRecorderTests(_FakeHost):
         # as in the Nix sandbox, would not know what to run.
         fake = Path(self.tmp.name) / "gpu-screen-recorder"
         fake.symlink_to(sys.executable)
-        args = ["-c", "import time; time.sleep(30)"]
+        # The comment makes the command line this run's own: two suites on
+        # one machine each found the other's process.
+        args = ["-c", f"import time; time.sleep(30)  # {os.getpid()} {self.tmp.name}"]
         proc = subprocess.Popen(["gpu-screen-recorder", *args], executable=str(fake))
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)

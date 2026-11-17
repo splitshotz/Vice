@@ -116,6 +116,84 @@ def match_trigger_phrase(
     return None
 
 
+_UNITS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19,
+}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+         "seventy": 70, "eighty": 80, "ninety": 90}
+_TIME_UNITS = {"second": 1, "seconds": 1, "minute": 60, "minutes": 60}
+
+
+def _spoken_number(words: list[str]) -> Optional[int]:
+    """The number in *words* as the recogniser writes it ("forty five",
+    "one hundred twenty"), or None when they are not all one number."""
+    if not words:
+        return None
+    if len(words) == 1 and words[0].isdigit():
+        return int(words[0])
+    total = 0
+    last = ""  # the kind of word before this one
+    for word in words:
+        if word in _TENS and last in ("", "hundred"):
+            total += _TENS[word]
+            last = "tens"
+        elif word in _UNITS and last in ("", "tens", "hundred"):
+            if last == "tens" and _UNITS[word] > 9:
+                return None
+            total += _UNITS[word]
+            last = "units"
+        elif word == "hundred" and last == "units" and 0 < total < 10:
+            total *= 100
+            last = "hundred"
+        elif word == "and" and last == "hundred":
+            continue
+        else:
+            return None
+    return total if last in ("tens", "units", "hundred") else None
+
+
+def match_clip_length(
+    text: str,
+    words_list: Optional[list[dict[str, Any]]] = None,
+    min_confidence: float = 0.50,
+) -> Optional[int]:
+    """Seconds asked for by "clip last thirty seconds" or "clip the last two
+    minutes", or None when *text* is not that command (#302).
+
+    Same guard as the wake phrases: a command is short, so at most two words
+    before it and one after.
+    """
+    words = normalize_phrase(text).split()
+    for start in range(min(3, len(words))):
+        if words[start] != "clip":
+            continue
+        rest = words[start + 1:]
+        if rest[:1] == ["the"]:
+            rest = rest[1:]
+        if rest[:1] != ["last"]:
+            continue
+        rest = rest[1:]
+        for end, word in enumerate(rest):
+            if word not in _TIME_UNITS:
+                continue
+            if len(rest) - end - 1 > 1:
+                break
+            # "clip last minute" is one minute.
+            amount = _spoken_number(rest[:end]) if end else 1
+            if not amount:
+                break
+            if words_list:
+                spoken = [w for w in words_list
+                          if normalize_phrase(w.get("word", "")) in words[start:]]
+                if any(w.get("conf", 1.0) < min_confidence for w in spoken):
+                    return None
+            return amount * _TIME_UNITS[word]
+    return None
+
+
 def is_vosk_available() -> bool:
     """Check if the vosk speech recognition package is installed."""
     try:
@@ -382,11 +460,14 @@ class VoiceListener:
                     break
 
                 matched_phrase = None
+                clip_length: Optional[int] = None
                 if rec.AcceptWaveform(data):
                     try:
                         res = json.loads(rec.Result())
                         raw_text = res.get("text", "")
-                        matched_phrase = match_trigger_phrase(
+                        clip_length = match_clip_length(
+                            raw_text, res.get("result", []), self._min_confidence)
+                        matched_phrase = f"clip last {clip_length}s" if clip_length else match_trigger_phrase(
                             raw_text,
                             res.get("result", []),
                             phrases,
@@ -403,7 +484,7 @@ class VoiceListener:
                         self.last_triggered = now
                         rec.Reset()
                         log.info("Voice wake phrase matched: '%s' -> triggering clip", matched_phrase)
-                        self._dispatch_trigger(matched_phrase)
+                        self._dispatch_trigger(matched_phrase, clip_length)
                     else:
                         rec.Reset()
                         log.debug("Voice wake phrase '%s' matched during cooldown, ignoring", matched_phrase)
@@ -426,14 +507,16 @@ class VoiceListener:
             if self._current_proc is proc:
                 self._current_proc = None
 
-    def _dispatch_trigger(self, phrase: str = "") -> None:
+    def _dispatch_trigger(self, phrase: str = "", clip_length: Optional[int] = None) -> None:
         """Dispatch clip trigger callback back into the asyncio loop."""
         if not self.on_trigger:
             return
+        # A spoken length is passed on; the plain phrases call it bare, as before.
+        args = (clip_length,) if clip_length else ()
 
         try:
             if inspect.iscoroutinefunction(self.on_trigger):
-                coro = self.on_trigger()
+                coro = self.on_trigger(*args)
                 if self._loop and self._loop.is_running():
                     asyncio.run_coroutine_threadsafe(coro, self._loop)
                 else:
@@ -446,7 +529,7 @@ class VoiceListener:
                     except RuntimeError as exc:
                         log.warning("Could not dispatch voice trigger callback: %s", exc)
             else:
-                res = self.on_trigger()
+                res = self.on_trigger(*args)
                 if asyncio.iscoroutine(res):
                     if self._loop and self._loop.is_running():
                         asyncio.run_coroutine_threadsafe(res, self._loop)

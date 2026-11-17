@@ -2563,6 +2563,82 @@ def _tail_text_file(path: Path, lines: int = 20) -> str:
     return "\n".join(content[-lines:])
 
 
+def _doctor_log_tail(path: Path, lines: int = 20) -> str:
+    """The end of the daemon log for a report: without the recorder's
+    once-a-second throughput lines, and with the last recorder command, which
+    is what says which audio was asked for (#309)."""
+    try:
+        content = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    kept = [line for line in content if "fps:" not in line or "gsr:" not in line]
+    tail = kept[-lines:]
+    for line in reversed(kept):
+        if "Starting GSR:" in line:
+            if line not in tail:
+                tail.insert(0, line)
+            break
+    return "\n".join(tail)
+
+
+def _doctor_run(cmd: list[str], timeout: float = 15.0) -> str:
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"({exc})"
+    return (done.stdout.strip() or done.stderr.strip())
+
+
+def _doctor_audio_lines(cfg) -> list[str]:
+    """What audio Vice asks the recorder for, and what the newest clip holds.
+
+    "No sound in my clips" is a wrong source, a muted one or a track the
+    player does not pick, and nothing else in the report tells them apart.
+    """
+    from .recorder import _gsr_audio_args
+    rc = cfg.recording
+    lines = [
+        f"  Desktop audio: {'on' if rc.capture_audio else 'off'} "
+        f"(source {rc.gsr_audio_source or 'default_output'}, volume {rc.desktop_volume})",
+        f"  Microphone: {'on' if rc.capture_microphone else 'off'} "
+        f"(source {rc.microphone_source or 'default_input'}, volume {rc.microphone_volume})",
+        f"  Separate tracks: {list(rc.audio_tracks) or 'none'}"
+        f"{' with a combined track first' if rc.audio_tracks and rc.audio_tracks_mix_first else ''}",
+        f"  Recorder audio arguments: {' '.join(_gsr_audio_args(rc)) or '(none)'}",
+    ]
+    if shutil.which("pactl"):
+        lines.append(f"  Default output: {_doctor_run(['pactl', 'get-default-sink'], 3) or '(none)'}")
+        lines.append(f"  Default input: {_doctor_run(['pactl', 'get-default-source'], 3) or '(none)'}")
+    folder = resolve_path(cfg.output.directory)
+    try:
+        clips = sorted(
+            (f for f in folder.iterdir()
+             if f.is_file() and f.suffix.lower() in (".mp4", ".mkv") and not f.name.startswith(".")),
+            key=lambda f: f.stat().st_mtime)
+    except OSError as exc:
+        lines.append(f"  Clips folder: {exc}")
+        return lines
+    if not clips or not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
+        lines.append("  Newest clip: (none to check)" if not clips else "  Newest clip: (ffmpeg not found)")
+        return lines
+    newest = clips[-1]
+    streams = _doctor_run([
+        "ffprobe", "-v", "error", "-select_streams", "a",
+        "-show_entries", "stream=index,codec_name,channels:stream_tags=title",
+        "-of", "csv=p=0", str(newest)])
+    rows = [row for row in streams.splitlines() if row.strip()]
+    lines.append(f"  Newest clip: {newest.name}, {len(rows)} audio track(s)")
+    for number, row in enumerate(rows):
+        # The loudest sample of the last ten seconds: -91 dB is digital silence.
+        heard = _doctor_run([
+            "ffmpeg", "-nostdin", "-hide_banner", "-sseof", "-10", "-i", str(newest),
+            "-map", f"0:a:{number}", "-af", "volumedetect", "-f", "null", "-"], 30)
+        peak = next((part.split("max_volume:")[1].strip() for part in heard.splitlines()
+                     if "max_volume:" in part), "not measured")
+        lines.append(f"    track {number + 1}: {row} (loudest {peak})")
+    return lines
+
+
 def _http_probe(url: str, timeout: float = 2.0) -> tuple[bool, str]:
     try:
         with urlopen(url, timeout=timeout) as resp:
@@ -2891,6 +2967,14 @@ def doctor() -> None:
     click.echo(f"  voice clipping: {'enabled' if voice_enabled else 'disabled'}")
     click.echo("")
 
+    click.echo("Audio")
+    try:
+        for line in _doctor_audio_lines(cfg):
+            click.echo(line)
+    except Exception as exc:
+        click.echo(f"  ERROR: {exc}")
+    click.echo("")
+
     # From this shell, which is not necessarily what the daemon's environment
     # looks like. When this says x11 and the log line below says adapter=none,
     # the daemon started before the session exported DISPLAY (#176).
@@ -2899,7 +2983,7 @@ def doctor() -> None:
     click.echo("")
 
     click.echo("Recent daemon log")
-    log_tail = _tail_text_file(DAEMON_LOG_FILE, lines=20)
+    log_tail = _doctor_log_tail(DAEMON_LOG_FILE, lines=20)
     if log_tail:
         for line in log_tail.splitlines():
             click.echo(f"  {line}")

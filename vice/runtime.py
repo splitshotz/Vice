@@ -101,7 +101,13 @@ def runtime_env_snapshot() -> dict[str, str]:
     return {key: os.environ.get(key, "") for key in RUNTIME_ENV_KEYS}
 
 
-def user_systemd_env_snapshot() -> dict[str, str]:
+# Where the session finds programs and their .desktop files. A service can
+# start before the compositor exports these, or be wrapped with its own
+# (Nix), and then xdg-open finds no file manager (#283).
+SESSION_SEARCH_PATH_KEYS = ("PATH", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS")
+
+
+def user_systemd_env_snapshot(keys: tuple[str, ...] | None = None) -> dict[str, str]:
     """Return relevant graphical-session vars exported by the user systemd manager."""
     if shutil.which("systemctl") is None:
         return {}
@@ -117,7 +123,7 @@ def user_systemd_env_snapshot() -> dict[str, str]:
         return {}
 
     values: dict[str, str] = {}
-    wanted = set(RUNTIME_ENV_KEYS) - {"HOME"}
+    wanted = set(keys) if keys else set(RUNTIME_ENV_KEYS) - {"HOME"}
     for line in out.splitlines():
         if "=" not in line:
             continue
@@ -139,6 +145,27 @@ def load_user_systemd_env() -> list[str]:
             os.environ[key] = value
             filled.append(key)
     return filled
+
+
+def session_launch_env() -> dict[str, str]:
+    """This process's environment for starting one of the user's own programs.
+
+    The session's search paths are added after ours, entry by entry, so
+    whatever already resolves here still resolves the same way.
+    """
+    env = dict(os.environ)
+    for key, value in user_systemd_env_snapshot(SESSION_SEARCH_PATH_KEYS).items():
+        if key not in SESSION_SEARCH_PATH_KEYS:
+            continue
+        have = [part for part in env.get(key, "").split(":") if part]
+        extra = [part for part in value.split(":") if part and part not in have]
+        if key != "PATH" and not have:
+            # Unset means the XDG defaults, which an explicit value replaces.
+            # The session's own value is the better answer than ours plus it.
+            env[key] = value
+        elif extra:
+            env[key] = ":".join(have + extra)
+    return env
 
 
 def has_display() -> bool:

@@ -166,7 +166,7 @@
     "shareTitle": "{action}. Fais un clic droit pour voir d'autres options de partage",
     "discordPreparing": "Création d'une copie adaptée à Discord",
     "discordCopied": "Copié pour Discord",
-    "discordCopiedDetail": "Colle-la dans un message Discord. Elle respecte la limite d'envoi gratuite.",
+    "discordCopiedDetail": "Colle-la dans un message Discord.",
     "errDiscordCopy": "Impossible de copier le clip pour Discord"
   },
   "playlistModal": {
@@ -458,7 +458,7 @@
     "linkTitle": "Copier le lien",
     "linkHelp": "Le bouton de lien sur un clip copie une adresse qui lit le clip dans un navigateur. Colle-la dans Discord et elle s'intègre.",
     "tunnelTitle": "En local, ou accessible de partout",
-    "tunnelHelp": "Tout seul, le lien ne fonctionne que sur cette machine. Active le tunnel Cloudflare dans Réglages et il fonctionne partout, jusqu'à ce que le daemon redémarre et que l'adresse change.",
+    "tunnelHelp": "Sans Lien public, il ne fonctionne que sur ton réseau local. Active Lien public dans Réglages et il fonctionne partout, jusqu'à ce que Vice redémarre et que l'adresse change.",
     "badgeLink": "Lien",
     "badgeTunnel": "Réseau",
     "moreTitle": "Le reste se trouve dans Réglages",
@@ -688,9 +688,9 @@
     "audioPreviewFailed": "Impossible de lire cette piste audio. Réessaie ou consulte le journal.",
     "detachedTracksHelp": "Chaque source enregistrée a sa propre piste. Seule la piste 1 est activée au départ, pour qu'une piste combinée ne soit pas mixée deux fois. Réactive le son des sources que tu veux entendre.",
     "preparingMedia": "Préparation de l'aperçu",
-    "discordOptimize": "Optimiser pour Discord (moins de 20 Mo)",
+    "discordOptimize": "Optimiser pour Discord (moins de {mb} Mo)",
     "exportSummary": "{seconds}s · {format} vers {path}",
-    "exportFormatDiscord": "Optimisé pour Discord (moins de 20 Mo)",
+    "exportFormatDiscord": "Optimisé pour Discord (moins de {mb} Mo)",
     "exportFormatDefault": "H.264 et AAC",
     "exportFolderUnpicked": "un dossier de ton choix"
   },

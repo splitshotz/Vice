@@ -29,13 +29,18 @@ export function ShareModal({
   onClose,
   onCopyLink,
   onCopyFile,
+  onNewLink,
 }: {
   clip: Clip | null;
   onClose: () => void;
   onCopyLink: (clip: Clip) => void;
   /** Puts the Discord-sized file on the clipboard, for where a drag does not land (#289). */
   onCopyFile: (clip: Clip) => void;
+  /** Replaces the share link, which stops the old one working (#213). */
+  onNewLink: (clip: Clip) => void;
 }) {
+  // Taking a link back cannot be undone, so the button asks once.
+  const [confirmNew, setConfirmNew] = useState(false);
   const [copy, setCopy] = useState<DiscordCopy | null>(null);
   const [failed, setFailed] = useState('');
   const slug = clip?.slug;
@@ -45,6 +50,7 @@ export function ShareModal({
   useEffect(() => {
     if (!slug) return;
     let cancelled = false;
+    setConfirmNew(false);
     setCopy(null);
     setFailed('');
     void api
@@ -89,7 +95,22 @@ export function ShareModal({
     <Modal open={clip !== null} title={t('viewer.shareTitle')} onClose={onClose}>
       <div className="share-sheet">
         <div className="share-link-row">
-          <span className="share-label">{t('viewer.shareHighQuality')}</span>
+          <div className="share-link-head">
+            <span className="share-label">{t('viewer.shareHighQuality')}</span>
+            {link ? (
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm"
+                onClick={() => {
+                  if (!confirmNew) return setConfirmNew(true);
+                  setConfirmNew(false);
+                  onNewLink(shown);
+                }}
+                onBlur={() => setConfirmNew(false)}>
+                {confirmNew ? t('viewer.shareNewLinkConfirm') : t('viewer.shareNewLink')}
+              </button>
+            ) : null}
+          </div>
           {link ? (
             <button
               type="button"

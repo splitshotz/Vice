@@ -453,15 +453,43 @@ select option {
   gap: var(--spacing-2);
 }
 
-.sound-grid label {
+.sound-grid-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
-.sound-grid label span {
+.sound-grid-field label {
   font-size: 11.5px;
   color: var(--color-text-secondary);
+}
+
+.sound-grid-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.sound-grid-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Square, so the triangle sits in the middle of a real target. */
+.sound-grid-play {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sound-grid-problem {
+  font-size: 11.5px;
+  color: var(--color-error);
 }
 
 /* ── audio tracks ───────────────────────────────────────────────── */

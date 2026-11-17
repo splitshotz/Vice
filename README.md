@@ -154,12 +154,14 @@ The Flatpak also works on any other distro with Flatpak installed.
 |---|---|
 | **F9** | Save the last 20 s |
 | **"Vice, clip that"** | Save a clip hands-free (Settings → Audio → Voice clipping) |
+| **"Clip last 30 seconds"** | Save a clip of the length you say, in seconds or minutes |
 | **Extra clip keys** | Save their own duration, e.g. F6 for 60 s (Settings → Hotkeys) |
 | **Key combos** | Rebind to a modifier combo like **Alt + F9** (Settings → Hotkeys) |
 | **F9 · F9** (double-tap) | Start / stop a session recording |
 | **F9** during a session | Drop a highlight at this moment |
 | **Click a thumbnail** | Open viewer · ← → next/prev · **H** new highlight · **Esc** close |
 | **Share** | Copy the public URL (pastes into Discord as a playable embed) |
+| **Right-click Share** | Copy the clip as a file sized for Discord: 20 MB, or 50 or 500 MB for Nitro (Settings → Sharing) |
 | **Trim** | Drag handles to crop a clip in place |
 
 Clips live in `~/Videos/Vice/`. Closing the window keeps the daemon recording; reopen from your launcher any time.
@@ -264,6 +266,7 @@ port              = 8765  # local control UI (always 127.0.0.1)
 public_port       = 8766  # public share-only server (defaults to port + 1)
 cloudflare_tunnel = true
 base_url          = ""    # optional public origin override (reverse proxy / custom domain)
+discord_max_mb    = 20    # size of a Discord copy: 20 (free), 50 (Nitro Basic) or 500 (Nitro)
 
 [discord]
 enabled            = true   # shows Rich Presence when a known/custom game is focused
@@ -311,7 +314,7 @@ Voice clipping runs completely offline using [Vosk](https://alphacephei.com/vosk
    unzip vosk-model-small-en-us-0.15.zip -d ~/.local/share/vice/models/
    rm vosk-model-small-en-us-0.15.zip
    ```
-3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set.
+3. Enable **Voice clipping** in Settings under **Audio** (or in `~/.config/vice/config.toml`). Vice listens for **"Vice, clip that"** and **"Clip that"**, plus any custom trigger phrase you set. **"Clip last 30 seconds"** or **"Clip the last two minutes"** saves that length instead of your usual one.
 
 ### Matugen colours
 

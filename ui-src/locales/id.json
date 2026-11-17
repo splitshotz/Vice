@@ -161,7 +161,7 @@
     "shareTitle": "{action}. Klik kanan untuk opsi berbagi lainnya",
     "discordPreparing": "Membuat salinan sesuai batas ukuran Discord",
     "discordCopied": "Disalin untuk Discord",
-    "discordCopiedDetail": "Tempel ke pesan Discord. Ukurannya sesuai batas unggahan gratis.",
+    "discordCopiedDetail": "Tempel ke pesan Discord.",
     "errDiscordCopy": "Tidak dapat menyalin klip untuk Discord"
   },
   "playlistModal": {
@@ -445,7 +445,7 @@
     "linkTitle": "Salin tautan",
     "linkHelp": "Tombol tautan pada klip menyalin alamat untuk memutar klip di browser. Tempel ke Discord untuk menampilkan sematan video.",
     "tunnelTitle": "Lokal, atau dapat diakses dari mana saja",
-    "tunnelHelp": "Secara bawaan, tautan hanya berfungsi di komputer ini. Aktifkan tunnel Cloudflare di Pengaturan agar dapat diakses dari mana saja, sampai daemon dimulai ulang dan alamatnya berubah.",
+    "tunnelHelp": "Tanpa Tautan publik, tautan hanya berfungsi di jaringan rumah Anda. Aktifkan Tautan publik di Pengaturan agar berfungsi di mana saja, sampai Vice dimulai ulang dan alamatnya berubah.",
     "badgeLink": "Tautan",
     "badgeTunnel": "Daring",
     "moreTitle": "Selebihnya ada di Pengaturan",
@@ -542,7 +542,7 @@
     "customPath": "Lokasi khusus",
     "alsoAddToLibrary": "Tambahkan juga ke pustaka Vice",
     "exportKeys": "Tampilkan tombol yang ditekan",
-    "discordOptimize": "Optimalkan untuk Discord (di bawah 20 MB)",
+    "discordOptimize": "Optimalkan untuk Discord (di bawah {mb} MB)",
     "encoding": "Mengodekan H.264. Anda bisa membiarkan jendela ini terbuka atau melanjutkan aktivitas lain di Vice.",
     "videoTrack": "Trek video",
     "audioTrack": "Trek audio",
@@ -655,7 +655,7 @@
     "detachedTracksHelp": "Setiap sumber rekaman memiliki jalurnya sendiri. Hanya trek 1 yang aktif sejak awal agar trek gabungan tidak tercampur dua kali. Bunyikan sumber yang ingin didengar.",
     "preparingMedia": "Menyiapkan pratinjau",
     "exportSummary": "{seconds} dtk · {format} ke {path}",
-    "exportFormatDiscord": "Dioptimalkan untuk Discord (di bawah 20 MB)",
+    "exportFormatDiscord": "Dioptimalkan untuk Discord (di bawah {mb} MB)",
     "exportFormatDefault": "H.264 dan AAC",
     "exportFolderUnpicked": "folder pilihan Anda"
   },

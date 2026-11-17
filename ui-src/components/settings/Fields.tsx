@@ -1,4 +1,5 @@
 import {useId, useState, type ReactNode} from 'react';
+import {api} from '../../lib/api';
 import {t} from '../../lib/i18n';
 
 /**
@@ -272,22 +273,60 @@ export function SoundGrid({
   onChange: (key: string, next: string) => void;
 }) {
   const id = useId();
+  // Why a field's file did not play, so nobody has to go reading a log (#297).
+  const [problems, setProblems] = useState<Record<string, string>>({});
+  const [trying, setTrying] = useState('');
+  const tryIt = (key: string) => {
+    const path = (values[key] ?? '').trim();
+    if (!path) return;
+    setTrying(key);
+    setProblems(p => ({...p, [key]: ''}));
+    void api
+      .trySound(path)
+      .then(r => setProblems(p => ({...p, [key]: r.problem || ''})))
+      .catch(() => setProblems(p => ({...p, [key]: 'unplayable'})))
+      .finally(() => setTrying(k => (k === key ? '' : k)));
+  };
   return (
     <div className="sound-grid">
-      {fields.map(([key, labelKey, placeholder]) => (
-        <label key={key} htmlFor={`${id}-${key}`}>
-          <span>{t(labelKey)}</span>
-          <input
-            id={`${id}-${key}`}
-            className="text-input"
-            data-mono
-            value={values[key] ?? ''}
-            placeholder={placeholder}
-            spellCheck={false}
-            onChange={e => onChange(key, e.target.value)}
-          />
-        </label>
-      ))}
+      {fields.map(([key, labelKey, placeholder]) => {
+        const problem = problems[key];
+        const empty = !(values[key] ?? '').trim();
+        return (
+          <div key={key} className="sound-grid-field">
+            <label htmlFor={`${id}-${key}`}>{t(labelKey)}</label>
+            <div className="sound-grid-row">
+              <input
+                id={`${id}-${key}`}
+                className="text-input"
+                data-mono
+                value={values[key] ?? ''}
+                placeholder={placeholder}
+                spellCheck={false}
+                aria-invalid={problem ? true : undefined}
+                onChange={e => {
+                  setProblems(p => ({...p, [key]: ''}));
+                  onChange(key, e.target.value);
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-quiet btn-sm sound-grid-play"
+                disabled={empty || trying === key}
+                aria-label={t('settings.soundPlayAria', {name: t(labelKey)})}
+                title={t('settings.soundPlayAria', {name: t(labelKey)})}
+                onClick={() => tryIt(key)}>
+                <span className="sound-pack-play" aria-hidden="true" />
+              </button>
+            </div>
+            {problem ? (
+              <span className="sound-grid-problem" role="status">
+                {t(`settings.soundProblem.${problem}`)}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

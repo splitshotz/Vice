@@ -1240,7 +1240,8 @@ def _gsr_monitor_listing_line(line: str) -> bool:
 def _gsr_progress_line(line: str) -> bool:
     """GSR prints a throughput line every second. Keeping those would push the
     one line that explains a death straight out of the tail."""
-    return bool(re.match(r"^\s*(update|damage)\s+fps:", line, re.IGNORECASE))
+    # Newer builds prefix it: "gsr info: update fps: 60, damage fps: 60".
+    return bool(re.match(r"^\s*(gsr info:\s*)?(update|damage)\s+fps:", line, re.IGNORECASE))
 
 
 def _gsr_runtime_error(raw: str) -> Optional[str]:

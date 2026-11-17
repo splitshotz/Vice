@@ -1,7 +1,7 @@
 import {useStore} from '../state/store';
 import {useImageActions} from '../state/imageActions';
 import {t} from '../lib/i18n';
-import {hotkeyLabel} from '../lib/format';
+import {comboLabel} from '../lib/format';
 import {ImageCard} from '../components/ImageCard';
 
 /**
@@ -36,7 +36,7 @@ export function Images() {
           {query
             ? t('images.emptySearch', {query})
             : bound
-              ? t('images.emptyLibrary', {hotkey: hotkeyLabel(bound)})
+              ? t('images.emptyLibrary', {hotkey: comboLabel(bound)})
               : t('images.emptyNoKey')}
         </p>
       ) : (

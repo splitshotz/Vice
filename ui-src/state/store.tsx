@@ -11,7 +11,7 @@ import {
 
 import {api} from '../lib/api';
 import {connectWs} from '../lib/ws';
-import {formatDuration, hotkeyLabel} from '../lib/format';
+import {comboLabel, formatDuration, hotkeyLabel} from '../lib/format';
 import {H264_SUPPORTED} from '../lib/env';
 import {ACCENT_NAMES, DEFAULT_ACCENT} from '../theme/accents';
 import type {AccentChoice} from '../theme/viceTheme';
@@ -663,7 +663,7 @@ export function StoreProvider({children}: {children: ReactNode}) {
   }, [state.images, state.playlists, state.currentPlaylistId, state.searchQuery]);
 
   const hotkey = useMemo(
-    () => hotkeyLabel(state.config?.hotkeys?.clip as string | undefined),
+    () => { const key = state.config?.hotkeys?.clip as string | undefined; return key ? comboLabel(key) : hotkeyLabel(key); },
     [state.config],
   );
 

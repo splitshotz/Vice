@@ -1,0 +1,17 @@
+name: Feature request
+description: Something you would like Vice to do
+labels: ["enhancement"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Before you post
+      options:
+        - label: I checked the roadmap (#291) and the open issues, and this is not already there.
+          required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you would like
+      description: What it should do and when you would use it.
+    validations:
+      required: true
