@@ -2173,7 +2173,10 @@ class ViceDaemon:
             else:
                 self._session_game = await asyncio.to_thread(self._detect_game)
         except Exception:
-            log.exception("Session game detection failed; automatic stopping unavailable")
+            if auto_stop_enabled:
+                log.exception("Session game detection failed; automatic stopping unavailable")
+            else:
+                log.exception("Session game detection failed; recording without a game tag")
         tag = self._session_game if self.cfg.output.tag_clips_with_game else None
         path = await self.recorder.start_session(tag=tag)
         if path is None:
@@ -2193,9 +2196,10 @@ class ViceDaemon:
         elif auto_stop == "unavailable":
             message = "Automatic stopping is unavailable for this session. Stop it manually."
         else:
-            message = "Automatic session stopping is off."
-        log.info(message)
-        click.echo(f"[Vice] {message}", err=True)
+            message = None
+        if message is not None:
+            log.info(message)
+            click.echo(f"[Vice] {message}", err=True)
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({

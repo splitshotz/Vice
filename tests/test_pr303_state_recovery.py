@@ -85,6 +85,38 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         await self.stop_unbound_session_during_scan_failure()
         await self.assert_stopped_game_stays_stopped_then_new_game_starts()
 
+    async def test_unbound_failed_stop_then_empty_scan_allows_returning_game_to_restart(self):
+        # Characterize the existing policy, not a stronger suppression promise:
+        # a successful empty scan resolves pending intent without identifying
+        # the stopped game. Its still-running process can be selected later.
+        await self.stop_unbound_session_during_scan_failure()
+        self.scan.return_value = WindowScan([], None)
+        await self.daemon._auto_start_tick()
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load_snapshot(),
+                         (set(), False, 2))
+        self.assertFalse(self.daemon._session_active)
+        self.scan.return_value = WindowScan([self.win], 'game')
+        await self.daemon._auto_start_tick()
+        self.assertFalse(self.daemon._session_active)
+        await self.daemon._auto_start_tick()
+        self.assertTrue(self.daemon._session_active)
+        self.assertEqual(self.daemon._session_process_identity, self.identities[42])
+
+    async def test_bound_manual_stop_remains_suppressed_across_empty_scan_and_return(self):
+        await self.detect()
+        self.assertEqual(self.daemon._session_process_identity, self.identities[42])
+        self.scan.return_value = None
+        self.scan.reset_mock()
+        await self.daemon._stop_session()
+        self.scan.assert_not_called()  # A bound stop already knows its identity.
+        self.scan.return_value = WindowScan([], None)
+        await self.daemon._auto_start_tick()
+        self.scan.return_value = WindowScan([self.win], 'game')
+        await self.detect()
+        self.assertFalse(self.daemon._session_active)
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load_snapshot(),
+                         ({self.identities[42]}, False, 2))
+
     async def test_setting_toggle_recovers_failed_stop_without_restarting_stopped_game(self):
         await self.stop_unbound_session_during_scan_failure()
         await self.toggle_setting()

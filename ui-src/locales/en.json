@@ -546,7 +546,7 @@
     "updatingDetail": "The recorder restarts to pick up the new version. This window reconnects on its own.",
     "sessionAutoStarted": "Session started for detected game",
     "sessionAutoStartFailed": "Automatic session start failed",
-    "sessionAutoStartFailedDetail": "Vice could not start a session after retrying. Start one manually; automatic retries have stopped."
+    "sessionAutoStartFailedDetail": "Start a session manually; automatic retries have stopped."
   },
   "about": {
     "title": "About",
@@ -811,12 +811,12 @@
     "backendWf": "wf-recorder (Wayland)",
     "backendFfmpeg": "ffmpeg (X11)",
     "sessionStopOnGameExit": "Stop session when the game exits",
-    "sessionStopOnGameExitHelp": "When enabled, Vice stops a session five seconds after the game process that was active when the session started exits. Applies to the next session.",
+    "sessionStopOnGameExitHelp": "Stop the session five seconds after the game exits.",
     "sessionStartOnGameDetect": "Start session when a game is detected",
-    "sessionStartOnGameDetectHelp": "Automatically record recognized games on KDE Wayland or X11, including games already running in the background. A manual stop lasts until that game is relaunched. Automatic stopping is controlled separately.",
-    "sessionAutoStartErrorUnsupported": "Automatic recording is unavailable on this desktop.",
-    "sessionAutoStartErrorDetection": "Vice cannot detect games right now. Automatic recording is waiting.",
-    "sessionAutoStartErrorState": "Vice could not remember stopped games. Automatic recording is paused.",
+    "sessionStartOnGameDetectHelp": "Automatically start a session when a game is detected.",
+    "sessionAutoStartErrorUnsupported": "Automatic recording is unavailable here.",
+    "sessionAutoStartErrorDetection": "Automatic recording is waiting for game detection.",
+    "sessionAutoStartErrorState": "Automatic recording is paused because Vice cannot remember stopped games.",
     "followMouse": "Follow my mouse",
     "followMouseHelp": "Record the monitor your pointer is on. Moving to another monitor restarts the buffer.",
     "followMouseUnsupported": "Needs X11, Hyprland or Sway. Vice cannot tell where the pointer is on this session.",

@@ -73,7 +73,7 @@ for (const enabled of [false, true]) {
         self.assertIn("sessionAutoStartError", settings)
         self.assertEqual(
             locale["settings"]["sessionAutoStartErrorUnsupported"],
-            "Automatic recording is unavailable on this desktop.",
+            "Automatic recording is unavailable here.",
         )
         self.assertIn("sessionAutoStartErrorDetection", locale["settings"])
         self.assertIn("sessionAutoStartErrorState", locale["settings"])

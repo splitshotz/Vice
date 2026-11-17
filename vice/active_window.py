@@ -21,6 +21,7 @@ import re
 import subprocess
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -133,6 +134,12 @@ def _run_scan_command(cmd: list[str], timeout: float = 3.0) -> str | None:
         log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", exc)
         return None
     if result.returncode != 0:
+        # xdotool search uses status 1 for a successful search with no matches.
+        # Keep transport errors (including a missing display) as failures.
+        if (cmd == ["xdotool", "search", "--class", ".*"]
+                and result.returncode == 1
+                and not result.stdout.strip() and not result.stderr.strip()):
+            return ""
         log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", result.stderr)
         return None
     return result.stdout
@@ -456,16 +463,29 @@ def _parse_wm_class(raw: str) -> str:
 
 
 def _scan_x11_game_windows() -> WindowScan | None:
+    empty_wmctrl = False
     if shutil.which("wmctrl"):
         output = _run_scan_command(["wmctrl", "-lpx"], timeout=3.0)
         if output is not None:
-            return _parse_wmctrl_scan(output)
-        log.debug("wmctrl scan failed; trying xdotool fallback")
+            if output.strip():
+                return _parse_wmctrl_scan(output)
+            empty_wmctrl = True
+        log.debug("wmctrl scan empty or failed; trying xdotool fallback")
 
     if not (shutil.which("xdotool") and shutil.which("xprop")):
-        return None
+        return WindowScan([], None) if empty_wmctrl else None
 
-    output = _run_scan_command(["xdotool", "search", "--class", ".*"], timeout=4.0)
+    # Bound the whole fallback, rather than spending a full timeout on each
+    # window while clients are disappearing or the X server is unresponsive.
+    deadline = time.monotonic() + 5.0
+
+    def run(command: list[str], timeout: float) -> str | None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        return _run_scan_command(command, timeout=min(timeout, remaining))
+
+    output = run(["xdotool", "search", "--class", ".*"], timeout=4.0)
     if output is None:
         return None
     raw_ids = output.split()
@@ -478,20 +498,21 @@ def _scan_x11_game_windows() -> WindowScan | None:
 
     windows: list[ActiveWindow] = []
     for raw_id, window_id in ids:
-        pid_output = _run_scan_command(["xdotool", "getwindowpid", raw_id], timeout=1.5)
-        pid = 0
-        if pid_output is not None:
-            try:
-                pid = int(pid_output.strip() or "0")
-            except ValueError:
-                return None
-            if pid < 0:
-                return None
-
-        class_output = _run_scan_command(["xprop", "-id", raw_id, "WM_CLASS"], timeout=1.5)
-        if class_output is None:
+        properties = run(["xprop", "-id", raw_id, "_NET_WM_PID", "WM_CLASS"], timeout=1.5)
+        if properties is None:
             return None
-        cls = _parse_wm_class(class_output)
+        pid = 0
+        cls = ""
+        for line in properties.splitlines():
+            if line.startswith("_NET_WM_PID") and "=" in line:
+                try:
+                    pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    return None
+                if pid < 0:
+                    return None
+            elif line.startswith("WM_CLASS"):
+                cls = _parse_wm_class(line)
         proc = _process_comm_for_pid(pid)
         if cls or proc:
             windows.append({
@@ -505,7 +526,9 @@ def _scan_x11_game_windows() -> WindowScan | None:
         return None
 
     focused_id = None
-    active = _run_scan_command(["xdotool", "getactivewindow"], timeout=1.5)
+    active = run(["xdotool", "getactivewindow"], timeout=1.5)
+    if time.monotonic() >= deadline:
+        return None
     if active is not None:
         focused_id = _canonical_x_window_id(active.strip())
     return WindowScan(windows=windows, focused_window_id=focused_id)

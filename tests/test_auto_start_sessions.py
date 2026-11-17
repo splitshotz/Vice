@@ -81,6 +81,39 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         self.read_host_boot_id.assert_not_called()
         self.assertIsNone(self.daemon._auto_start_task)
 
+    async def test_default_off_manual_recording_has_no_automatic_stopping_output(self):
+        d = self.daemon
+        d.cfg.recording.session_start_on_game_detect = False
+        d.cfg.recording.session_stop_on_game_exit = False
+        with mock.patch('vice.main.click.echo') as echo, \
+             mock.patch('vice.main.log.info') as info:
+            await d._start_session()
+        self.assertTrue(d._session_active)
+        self.assertEqual(d._session_game, 'Counter-Strike 2')
+        self.assertIsNone(getattr(d, '_session_monitor_task', None))
+        self.scan.assert_not_called()
+        self.read_host_boot_id.assert_not_called()
+        self.bind.assert_not_called()
+        for call in [*echo.call_args_list, *info.call_args_list]:
+            self.assertNotIn('Automatic', call.args[0])
+        await asyncio.sleep(0)
+        events = [call.args[0] for call in d.share.broadcast.call_args_list]
+        self.assertEqual(next(event['auto_stop'] for event in events
+                              if event['type'] == 'session_start'), 'off')
+
+    async def test_default_off_detection_failure_keeps_manual_recording_and_upstream_wording(self):
+        d = self.daemon
+        d.cfg.recording.session_start_on_game_detect = False
+        d.cfg.recording.session_stop_on_game_exit = False
+        with mock.patch.object(d, '_detect_game', side_effect=RuntimeError('detection failed')), \
+             mock.patch('vice.main.log.exception') as error:
+            await d._start_session()
+        error.assert_called_once_with(
+            'Session game detection failed; recording without a game tag')
+        self.assertTrue(d._session_active)
+        self.assertIsNone(d._session_game)
+        self.assertIsNone(getattr(d, '_session_monitor_task', None))
+
     async def test_transient_empty_failed_or_changed_scan_resets_confirmation(self):
         d = self.daemon
         for interrupted in (None, WindowScan([], None), WindowScan([self.other], None)):
