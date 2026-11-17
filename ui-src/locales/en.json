@@ -1000,6 +1000,10 @@
     "close": "Got it",
     "thanks": "Thanks to {names} for their work on this release.",
     "v2_19_0": {
+      "soundTest": {
+        "title": "Test your own sounds",
+        "body": "Each custom sound under Settings, Audio has a play button, and says why a file won't play."
+      },
       "voiceLength": {
         "title": "Say how long",
         "body": "\"Vice, clip last 30 seconds\" saves that length."
