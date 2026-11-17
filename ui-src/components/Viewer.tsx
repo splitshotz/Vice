@@ -62,7 +62,10 @@ const MUTED_KEY = 'vice-muted';
 
 function storedVolume(): number {
   try {
-    const raw = Number(localStorage.getItem(VOLUME_KEY));
+    // Nothing saved yet is full volume. Number(null) is 0, which opened the
+    // viewer silent for anyone who had never touched the slider.
+    const saved = localStorage.getItem(VOLUME_KEY);
+    const raw = saved === null || saved.trim() === '' ? NaN : Number(saved);
     return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 1;
   } catch {
     return 1;
