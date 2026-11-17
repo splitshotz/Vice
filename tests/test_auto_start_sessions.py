@@ -474,7 +474,7 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         def load():
             entered.set()
             release.wait(3)
-            return set(), False, 2
+            return set(), 1
         with mock.patch.object(SuppressionStore, 'load_snapshot', side_effect=load):
             loading = asyncio.create_task(d._ensure_auto_start_store())
             self.assertTrue(await asyncio.to_thread(entered.wait, 3))
@@ -483,8 +483,12 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await asyncio.wait_for(loading, 3))
         self.assertEqual(d._auto_start_error, 'state')
         self.assertTrue(d._auto_start_storage_failed)
-        # A stale operation cannot clear a newer failure; a subsequent
-        # successful retry can recover instead of latching it permanently.
+        # A stale operation cannot clear a newer failure; recovery must do
+        # fresh I/O rather than merely clearing a latch on a clean store.
+        self.assertTrue(d._auto_start_dirty)
+        with mock.patch.object(d._auto_start_store, 'save', side_effect=AutoStartStateError('still unavailable')):
+            self.assertFalse(await d._ensure_auto_start_store())
+        self.assertTrue(d._auto_start_storage_failed)
         self.assertTrue(await d._ensure_auto_start_store())
         self.assertFalse(d._auto_start_storage_failed)
         self.assertIsNone(d._auto_start_error)

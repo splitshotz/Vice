@@ -14,7 +14,7 @@ from unittest import mock
 
 from tests import test_auto_start_sessions as sessions
 from vice.active_window import WindowScan
-from vice.session_auto_start import SuppressionStore
+from vice.session_auto_start import AutoStartStateError, SuppressionStore
 
 BOOT = sessions.BOOT
 
@@ -39,6 +39,8 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         d = self.daemon
         d.cfg.recording.session_start_on_game_detect = False
         await d._sync_auto_start_task()
+        self.assertIsNone(d._auto_start_error)
+        self.assertFalse(d._auto_start_storage_failed)
         d.cfg.recording.session_start_on_game_detect = True
         # Exercise settings synchronization without a concurrently polling
         # loop. All detection ticks are explicitly driven by this test.
@@ -57,43 +59,37 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.scan.return_value = None
         await d._stop_session()
         self.assertFalse(d._session_active)
-        # Storage is healthy: persist unresolved intent so a restart cannot
-        # erase the user's stop merely because detection was unavailable.
-        identities, pending, _ = SuppressionStore(BOOT, self.state_path).load_snapshot()
-        self.assertEqual(identities, set())
-        self.assertTrue(pending)
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
+        self.assertFalse(self.state_path.exists(), 'failed identification must not save pending intent')
+        self.assertFalse(hasattr(d, '_auto_start_pending_suppression'))
         self.assertEqual(d._auto_start_error, 'detection')
 
-    async def assert_stopped_game_stays_stopped_then_new_game_starts(self):
-        d = self.daemon
-        self.scan.return_value = WindowScan([self.win], 'game')
+    async def assert_game_starts_without_suppression(self, window=None):
+        window = self.win if window is None else window
+        self.scan.return_value = WindowScan([window], window['window_id'])
         await self.detect()
-        self.assertFalse(d._session_active,
-                         'recovery must not restart the manually stopped game')
-        # The original game exits; the next observation is a different game.
-        old = self.identities[42]
-        self.probe_game_process.side_effect = (
-            lambda identity: 'exited' if identity == old else 'running'
-        )
-        self.scan.return_value = WindowScan([self.other], 'other')
-        await self.detect()
-        self.assertTrue(d._session_active,
-                        'a failed manual-stop scan must not block future games')
-        self.assertEqual(d._session_process_identity, self.identities[43])
+        self.assertTrue(self.daemon._session_active,
+                        'failed manual-stop identification must not suppress later observations')
+        self.assertEqual(self.daemon._session_process_identity, self.identities[window['pid']])
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
 
-    async def test_failed_manual_stop_scan_recovers_without_restarting_stopped_game(self):
+    async def test_failed_manual_stop_scan_suppresses_nothing_and_recovers(self):
         await self.stop_unbound_session_during_scan_failure()
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        await self.assert_game_starts_without_suppression()
+
+    async def test_manual_stop_scan_exception_does_not_suppress_unrelated_game(self):
+        self.scan.side_effect = RuntimeError('temporary scanner failure')
+        with self.assertLogs('vice', level='WARNING'):
+            await self.stop_unbound_session_during_scan_failure()
+        self.scan.side_effect = None
+        await self.assert_game_starts_without_suppression(self.other)
 
     async def test_unbound_failed_stop_then_empty_scan_allows_returning_game_to_restart(self):
-        # Characterize the existing policy, not a stronger suppression promise:
-        # a successful empty scan resolves pending intent without identifying
-        # the stopped game. Its still-running process can be selected later.
         await self.stop_unbound_session_during_scan_failure()
         self.scan.return_value = WindowScan([], None)
         await self.daemon._auto_start_tick()
         self.assertEqual(SuppressionStore(BOOT, self.state_path).load_snapshot(),
-                         (set(), False, 2))
+                         (set(), 1))
         self.assertFalse(self.daemon._session_active)
         self.scan.return_value = WindowScan([self.win], 'game')
         await self.daemon._auto_start_tick()
@@ -115,20 +111,24 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         await self.detect()
         self.assertFalse(self.daemon._session_active)
         self.assertEqual(SuppressionStore(BOOT, self.state_path).load_snapshot(),
-                         ({self.identities[42]}, False, 2))
+                         ({self.identities[42]}, 1))
 
-    async def test_setting_toggle_recovers_failed_stop_without_restarting_stopped_game(self):
+    async def test_setting_toggle_recovers_failed_stop_without_suppressing_unrelated_game(self):
         await self.stop_unbound_session_during_scan_failure()
         await self.toggle_setting()
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        await self.assert_game_starts_without_suppression(self.other)
 
     async def test_successful_save_clears_pause_and_keeps_known_manual_stop(self):
         await self.stop_unbound_session_during_scan_failure()
         d = self.daemon
         known = {self.identities[42]}
-        # This is a real successful atomic save through the existing
-        # controller seam, not a test clearing its error/block flags.
+        with mock.patch.object(SuppressionStore, 'save', side_effect=AutoStartStateError('temporary write failure')):
+            self.assertFalse(await d._save_auto_start_suppression(known))
+        self.assertEqual(d._auto_start_error, 'state')
+        # A real successful save releases the storage block without a restart.
         self.assertTrue(await d._save_auto_start_suppression(known))
+        self.assertFalse(d._auto_start_storage_failed)
+        self.assertIsNone(d._auto_start_error)
         self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), known)
         self.scan.return_value = WindowScan([self.win], 'game')
         await self.detect()
@@ -151,7 +151,7 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed, [True, True],
                          'malformed state must not poison every controller restart')
         self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
-        self.assertEqual(json.loads(self.state_path.read_text())['version'], 2)
+        self.assertEqual(json.loads(self.state_path.read_text())['version'], 1)
 
     async def test_malformed_state_is_repaired_across_controller_restarts(self):
         await self.assert_bad_state_recovers('{not-json')
@@ -242,10 +242,13 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.daemon._session_active)
         self.assertIsNone(self.daemon._auto_start_error)
 
-    async def test_stop_concurrent_with_initial_load_retains_saved_identities_and_pending_intent(self):
+    async def test_stop_concurrent_with_initial_load_retains_legacy_identities_without_intent(self):
         d = self.daemon
         known = {self.identities[42]}
-        SuppressionStore(BOOT, self.state_path).save(known, pending=True)
+        self.state_path.write_text(json.dumps({
+            'version': 2, 'boot_id': BOOT, 'pending': True,
+            'suppressed': [{'pid': 42, 'start_time': 100}],
+        }))
         self.focus.return_value = self.other
         await d._start_session()
         self.assertEqual(d._session_process_identity, self.identities[43])
@@ -270,39 +273,84 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
                 release.set()
             self.assertTrue(await asyncio.wait_for(loading, 3))
             await asyncio.wait_for(stopping, 3)
-        identities, pending, _ = SuppressionStore(BOOT, self.state_path).load_snapshot()
+        identities, version = SuppressionStore(BOOT, self.state_path).load_snapshot()
         self.assertEqual(identities, known | {self.identities[43]})
-        self.assertTrue(pending)
+        self.assertEqual(version, 1)
+        self.assertNotIn('pending', json.loads(self.state_path.read_text()))
 
-    async def test_deferred_stop_survives_restart_before_and_after_resolution(self):
+    async def test_failed_stop_has_no_deferred_intent_across_restarts(self):
         await self.stop_unbound_session_during_scan_failure()
         await self.restart_controller()
-        self.scan.return_value = WindowScan([self.win], 'game')
-        await self.detect()
-        self.assertFalse(self.daemon._session_active)
-        snapshot = SuppressionStore(BOOT, self.state_path).load_snapshot()
-        self.assertEqual(snapshot, ({self.identities[42]}, False, 2))
+        await self.assert_game_starts_without_suppression()
+        await self.daemon._change_session(False, stop_reason='shutdown')
         await self.restart_controller()
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        await self.assert_game_starts_without_suppression(self.other)
 
-    async def test_deferred_stop_waits_for_recognized_game_to_have_process_identity(self):
+    async def test_failed_stop_then_untrackable_window_does_not_defer_suppression(self):
         await self.stop_unbound_session_during_scan_failure()
         self.scan.return_value = WindowScan([dict(self.win, pid=0)], 'game')
         await self.detect()
-        self.assertTrue(SuppressionStore(BOOT, self.state_path).load_snapshot()[1])
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
+        await self.assert_game_starts_without_suppression(self.other)
 
-    async def test_initial_unbound_stop_defers_when_recognized_game_has_no_identity(self):
+    async def test_partial_manual_stop_identification_suppresses_nothing(self):
         d = self.daemon
         d.cfg.recording.session_start_on_game_detect = False
         await d._start_session()
         self.assertIsNone(d._session_process_identity)
         d.cfg.recording.session_start_on_game_detect = True
-        self.scan.return_value = WindowScan([dict(self.win, pid=0)], 'game')
+        self.scan.return_value = WindowScan([self.win, dict(self.other, pid=0)], 'game')
         await d._stop_session()
         self.assertFalse(d._session_active)
-        self.assertTrue(SuppressionStore(BOOT, self.state_path).load_snapshot()[1])
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
+        await self.assert_game_starts_without_suppression(self.other)
+
+    async def test_failed_stop_keeps_prior_valid_suppression_unchanged(self):
+        d = self.daemon
+        known = {self.identities[42]}
+        SuppressionStore(BOOT, self.state_path).save(known)
+        original = self.state_path.read_bytes()
+        d.cfg.recording.session_start_on_game_detect = False
+        await d._start_session()
+        d.cfg.recording.session_start_on_game_detect = True
+        self.scan.return_value = None
+        await d._stop_session()
+        self.assertEqual(self.state_path.read_bytes(), original)
+        self.scan.return_value = WindowScan([self.other], 'other')
+        await self.detect()
+        self.assertTrue(d._session_active)
+        self.assertEqual(d._session_process_identity, self.identities[43])
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), known)
+
+    async def test_legacy_v2_discards_pending_but_retains_valid_identities_across_restart(self):
+        self.state_path.write_text(json.dumps({
+            'version': 2, 'boot_id': BOOT, 'pending': True,
+            'suppressed': [{'pid': 42, 'start_time': 100}],
+        }))
+        self.scan.return_value = WindowScan([self.other], 'other')
+        await self.detect()
+        self.assertTrue(self.daemon._session_active)
+        self.assertEqual(self.daemon._session_process_identity, self.identities[43])
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), {self.identities[42]})
+        self.assertEqual(json.loads(self.state_path.read_text())['version'], 1)
+        await self.daemon._change_session(False, stop_reason='shutdown')
+        await self.restart_controller()
+        self.scan.return_value = WindowScan([self.win], 'game')
+        await self.detect()
+        self.assertFalse(self.daemon._session_active)
+        self.probe_game_process.return_value = 'exited'
+        self.scan.return_value = WindowScan([], None)
+        await self.daemon._auto_start_tick()
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
+
+    async def test_corrupt_backup_failure_does_not_prevent_atomic_repair(self):
+        self.state_path.write_text('{not-json')
+        with mock.patch.object(SuppressionStore, 'backup_corrupt', side_effect=AutoStartStateError('no backup space')), \
+             self.assertLogs('vice', level='WARNING') as logs:
+            await self.detect()
+        self.assertTrue(self.daemon._session_active)
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
+        self.assertTrue(any('Malformed' in item for item in logs.output))
 
     async def test_initial_read_failure_retains_known_stop_and_merges_after_recovery(self):
         d = self.daemon
@@ -355,13 +403,13 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         original_save = SuppressionStore.save
         calls = []
 
-        def save(store, identities, *, pending=False):
+        def save(store, identities):
             calls.append(set(identities))
             if len(calls) == 1:
                 entered.set()
                 if not release.wait(3):
                     raise TimeoutError('test did not release save')
-            return original_save(store, identities, pending=pending)
+            return original_save(store, identities)
 
         first_identity, second_identity = self.identities.values()
         with mock.patch.object(SuppressionStore, 'save', new=save):
@@ -379,7 +427,7 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(SuppressionStore(BOOT, self.state_path).load(),
                          {first_identity, second_identity})
 
-    async def test_stale_scan_cannot_resolve_a_new_deferred_manual_stop(self):
+    async def test_stale_scan_after_failed_manual_stop_does_not_create_suppression(self):
         d = self.daemon
         await d._auto_start_tick()
         entered, release = threading.Event(), threading.Event()
@@ -391,8 +439,7 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
                 entered.set()
                 if not release.wait(3):
                     raise TimeoutError('test did not release scan')
-                # This observation predates the manual stop and must not
-                # resolve its pending intent with an empty result.
+                # This observation predates the manual stop and must be discarded.
                 return [], None
             return None  # Manual stop's scan fails.
 
@@ -408,6 +455,6 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
             finally:
                 release.set()
             await asyncio.wait_for(scanning, 3)
-        self.assertTrue(SuppressionStore(BOOT, self.state_path).load_snapshot()[1])
+        self.assertEqual(SuppressionStore(BOOT, self.state_path).load(), set())
         self.assertFalse(d._session_active)
-        await self.assert_stopped_game_stays_stopped_then_new_game_starts()
+        await self.assert_game_starts_without_suppression(self.other)

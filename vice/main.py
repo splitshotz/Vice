@@ -1819,7 +1819,6 @@ class ViceDaemon:
         self._auto_start_storage_failure_epoch = 0
         self._auto_start_io_lock = asyncio.Lock()
         self._auto_start_dirty = False
-        self._auto_start_pending_suppression = False
         self._auto_start_generation = 0
         self._auto_start_store: Optional[SuppressionStore] = None
         self._auto_start_suppressed: set[ProcessIdentity] = set()
@@ -1848,28 +1847,27 @@ class ViceDaemon:
                 boot_id = await asyncio.to_thread(read_host_boot_id)
                 store = SuppressionStore(boot_id)
                 try:
-                    saved, pending, version = await asyncio.to_thread(store.load_snapshot)
+                    saved, version = await asyncio.to_thread(store.load_snapshot)
                 except MalformedAutoStartState:
                     log.exception('Malformed automatic-session suppression state')
-                    backup = await asyncio.to_thread(store.backup_corrupt)
-                    log.warning('Preserved malformed suppression state at %s', backup)
-                    saved, pending, version = set(), False, 2
+                    try:
+                        backup = await asyncio.to_thread(store.backup_corrupt)
+                        log.warning('Preserved malformed suppression state at %s', backup)
+                    except (AutoStartStateError, OSError):
+                        log.exception('Could not preserve malformed suppression state; attempting replacement')
+                    saved, version = set(), 1
                     self._auto_start_dirty = True
-                changed = bool(saved - self._auto_start_suppressed) or (
-                    pending and not self._auto_start_pending_suppression
-                )
+                changed = bool(saved - self._auto_start_suppressed)
                 self._auto_start_suppressed.update(saved)
-                self._auto_start_pending_suppression |= pending
                 if changed:
                     self._auto_start_generation += 1
                     self._auto_start_pending = None
                 self._auto_start_store = store
-                if version == 1:
+                if version == 2:
                     self._auto_start_dirty = True
             if self._auto_start_dirty:
                 await asyncio.to_thread(
                     self._auto_start_store.save, self._auto_start_suppressed,
-                    pending=self._auto_start_pending_suppression,
                 )
                 self._auto_start_dirty = False
         except (AutoStartStateError, OSError):
@@ -1877,6 +1875,8 @@ class ViceDaemon:
             await self._set_auto_start_error('state')
             return False
         if observed != self._auto_start_storage_failure_epoch:
+            # Only a fresh successful write may release a newer storage failure.
+            self._auto_start_dirty = True
             return False
         self._auto_start_storage_failed = False
         if self._auto_start_error == 'state':
@@ -1888,18 +1888,15 @@ class ViceDaemon:
             return await self._refresh_auto_start_store_locked()
 
     async def _save_auto_start_suppression(
-        self, identities: set[ProcessIdentity], *, pending: bool = False,
-        merge: bool = False,
+        self, identities: set[ProcessIdentity], *, merge: bool = False,
     ) -> bool:
         async with self._auto_start_io_lock:
             # Manual stops can wait behind an initial load. Merge under the
-            # same lock so newly loaded identities/pending intent survive.
+            # same lock so newly loaded identities survive.
             if merge:
                 self._auto_start_suppressed.update(identities)
-                self._auto_start_pending_suppression |= pending
             else:
                 self._auto_start_suppressed = set(identities)
-                self._auto_start_pending_suppression = pending
             self._auto_start_dirty = True
             self._auto_start_generation += 1
             self._auto_start_pending = None
@@ -1919,10 +1916,8 @@ class ViceDaemon:
                 continue
             identity = bind_game_process(win)
             if identity is None:
-                # Resolving a deferred manual stop requires identities for
-                # every recognized game; a temporary /proc miss must not
-                # erase intent and let that same instance restart later.
-                if require_identities or self._auto_start_pending_suppression:
+                # A partial manual-stop scan cannot identify every game.
+                if require_identities:
                     return None
                 continue
             targets.setdefault(identity, AutoStartTarget(game, win, identity))
@@ -1931,14 +1926,12 @@ class ViceDaemon:
         return list(targets.values()), focused
 
     async def _suppress_manually_stopped_session(self) -> None:
-        if not (self.cfg.recording.session_start_on_game_detect
-                or self._auto_start_store or self._auto_start_pending_suppression):
+        if not (self.cfg.recording.session_start_on_game_detect or self._auto_start_store):
             return
         # Capture the identity before any storage I/O can fail or suspend us.
         identity = getattr(self, "_session_process_identity", None)
         if identity is not None:
             stopped = {identity}
-            pending = False
         else:
             try:
                 scan = await asyncio.to_thread(self._scan_auto_start_targets, require_identities=True)
@@ -1946,21 +1939,23 @@ class ViceDaemon:
                 scan = None
                 log.exception("Cannot identify games during manual session stop")
             if scan is None:
+                # Invalidate an in-flight observation, but remember no stop intent.
+                self._auto_start_generation += 1
+                self._auto_start_pending = None
                 await self._set_auto_start_error('detection')
-                stopped = set()
-                pending = True
-            else:
-                stopped = {target.identity for target in scan[0]}
-                pending = False
-        await self._save_auto_start_suppression(
-            stopped, pending=pending, merge=True,
-        )
+                return
+            stopped = {target.identity for target in scan[0]}
+        await self._save_auto_start_suppression(stopped, merge=True)
 
     async def _sync_auto_start_task(self) -> None:
         self._init_auto_start()
         if not self.cfg.recording.session_start_on_game_detect or self._auto_start_shutdown:
             await self._stop_auto_start_task()
             if not self._auto_start_shutdown:
+                # Keep unsaved identities for retry, while releasing the setting's
+                # visible error. Re-enabling still requires successful persistence.
+                self._auto_start_dirty |= self._auto_start_storage_failed
+                self._auto_start_storage_failed = False
                 await self._set_auto_start_error(None)
             return
         if self._auto_start_task is None or self._auto_start_task.done():
@@ -2020,7 +2015,7 @@ class ViceDaemon:
                 remaining = self._auto_start_suppressed - expired
                 if remaining != self._auto_start_suppressed:
                     if not await self._save_auto_start_suppression(
-                        remaining, pending=self._auto_start_pending_suppression,
+                        remaining,
                     ):
                         self._auto_start_pending = None
                         return
@@ -2050,13 +2045,6 @@ class ViceDaemon:
                 await self._set_auto_start_error('detection')
                 return
             targets, focused = scan
-            if self._auto_start_pending_suppression:
-                identities = {target.identity for target in targets}
-                if not await self._save_auto_start_suppression(
-                    self._auto_start_suppressed | identities, pending=False,
-                ):
-                    self._auto_start_pending = None
-                    return
             await self._set_auto_start_error(None)
             selected = targets[0] if len(targets) == 1 else next(
                 (target for target in targets if target.identity == focused), None)
@@ -2074,7 +2062,6 @@ class ViceDaemon:
                 and self._auto_start_store is not None
                 and not self._auto_start_storage_failed
                 and not self._auto_start_dirty
-                and not self._auto_start_pending_suppression
                 and target.identity not in self._auto_start_suppressed
                 and attempts < 3 and time.monotonic() >= retry_at)
 

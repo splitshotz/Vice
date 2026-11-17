@@ -57,8 +57,8 @@ class SuppressionStoreTests(unittest.TestCase):
         self.assertEqual(self.store.load(), entries)
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
         document = json.loads(self.path.read_text())
-        self.assertEqual(document["version"], 2)
-        self.assertIs(document["pending"], False)
+        self.assertEqual(document["version"], 1)
+        self.assertNotIn("pending", document)
         self.assertEqual(document["boot_id"], BOOT_ID)
         self.assertEqual(
             document["suppressed"],
@@ -97,17 +97,21 @@ class SuppressionStoreTests(unittest.TestCase):
                 self.store.load()
         self.assertTrue(self.path.exists())
 
-    def test_version_one_load_and_pending_snapshot_round_trip(self) -> None:
-        self.path.write_text(json.dumps({
-            'version': 1, 'boot_id': BOOT_ID,
-            'suppressed': [{'pid': 42, 'start_time': 1234}],
-        }))
+    def test_v1_and_v2_load_keep_identities_and_save_without_pending(self) -> None:
         known = {ProcessIdentity(42, 1234)}
-        self.assertEqual(self.store.load_snapshot(), (known, False, 1))
-        self.store.save(known, pending=True)
-        self.assertEqual(self.store.load_snapshot(), (known, True, 2))
+        for version, pending in ((1, None), (2, False), (2, True)):
+            with self.subTest(version=version, pending=pending):
+                document = {'version': version, 'boot_id': BOOT_ID,
+                            'suppressed': [{'pid': 42, 'start_time': 1234}]}
+                if version == 2:
+                    document['pending'] = pending
+                self.path.write_text(json.dumps(document))
+                self.assertEqual(self.store.load_snapshot(), (known, version))
+                self.store.save(known)
+                self.assertEqual(self.store.load_snapshot(), (known, 1))
+                self.assertNotIn('pending', json.loads(self.path.read_text()))
         other_boot = SuppressionStore('22222222-2222-2222-2222-222222222222', self.path)
-        self.assertEqual(other_boot.load_snapshot(), (set(), False, 2))
+        self.assertEqual(other_boot.load_snapshot(), (set(), 1))
 
     def test_private_unique_diagnostic_backups_preserve_original_bytes(self) -> None:
         original = b'{not-json\n'

@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 STATE_PATH = actual_home_dir() / ".local" / "share" / "vice" / "session_auto_start.json"
 _BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
-_STATE_VERSION = 2
+_STATE_VERSION = 1
 _BOOT_ID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -67,15 +67,15 @@ class SuppressionStore:
         self.path = Path(path) if path is not None else STATE_PATH
 
     def load(self) -> set[ProcessIdentity]:
-        identities, _, _ = self.load_snapshot()
+        identities, _ = self.load_snapshot()
         return identities
 
-    def load_snapshot(self) -> tuple[set[ProcessIdentity], bool, int]:
-        """Return identities, unresolved-stop intent, and source schema version."""
+    def load_snapshot(self) -> tuple[set[ProcessIdentity], int]:
+        """Return identities and source version; v2 stop intent is discarded."""
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return set(), False, _STATE_VERSION
+            return set(), _STATE_VERSION
         except UnicodeError as exc:
             raise MalformedAutoStartState(f"Auto-start state is malformed: {exc}") from exc
         except OSError as exc:
@@ -86,15 +86,14 @@ class SuppressionStore:
             if not isinstance(data, dict) or "version" not in data:
                 raise ValueError("state must be an object with a version")
             version = data["version"]
-            if type(version) is not int or version not in (1, _STATE_VERSION):
+            if type(version) is not int or version not in (1, 2):
                 raise ValueError("unsupported state version")
             fields = {"version", "boot_id", "suppressed"}
             if version == 2:
                 fields.add("pending")
             if set(data) != fields:
                 raise ValueError("state contains unexpected or missing fields")
-            pending = data["pending"] if version == 2 else False
-            if type(pending) is not bool:
+            if version == 2 and type(data["pending"]) is not bool:
                 raise ValueError("pending must be a boolean")
             if (
                 not isinstance(data["boot_id"], str)
@@ -114,8 +113,8 @@ class SuppressionStore:
             raise MalformedAutoStartState(f"Auto-start state is malformed: {exc}") from exc
 
         if str(uuid.UUID(data["boot_id"])) != self.boot_id:
-            return set(), False, _STATE_VERSION
-        return identities, pending, version
+            return set(), version
+        return identities, version
 
     def backup_corrupt(self) -> Path:
         """Preserve invalid bytes privately before replacing a malformed file."""
@@ -139,7 +138,7 @@ class SuppressionStore:
                     log.debug("Could not remove incomplete diagnostic backup", exc_info=True)
             raise AutoStartStateError(f"Could not preserve malformed state: {exc}") from exc
 
-    def save(self, identities: set[ProcessIdentity], *, pending: bool = False) -> None:
+    def save(self, identities: set[ProcessIdentity]) -> None:
         if not isinstance(identities, set) or any(
             not isinstance(item, ProcessIdentity)
             or type(item.pid) is not int
@@ -149,12 +148,9 @@ class SuppressionStore:
             for item in identities
         ):
             raise AutoStartStateError("Cannot save malformed auto-start identities")
-        if type(pending) is not bool:
-            raise AutoStartStateError("Cannot save malformed pending state")
 
         payload = {
             "version": _STATE_VERSION,
-            "pending": pending,
             "boot_id": self.boot_id,
             "suppressed": [
                 {"pid": item.pid, "start_time": item.start_time}
