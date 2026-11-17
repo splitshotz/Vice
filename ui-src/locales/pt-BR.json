@@ -410,7 +410,7 @@
     "linkTitle": "Copiar link",
     "linkHelp": "O botão de link em um clipe copia um endereço que reproduz o clipe no navegador. Também pode ser colado no Discord para ser incorporado.",
     "tunnelTitle": "Apenas local, ou acessível de qualquer lugar",
-    "tunnelHelp": "Por si só, os links funcionam apenas na própria máquina. Mas basta ligar o túnel Cloudflare nas Configurações e eles passam a funcionar em qualquer lugar, até que o daemon reinicie e o endereço mude.",
+    "tunnelHelp": "Sem o Link público, ele só funciona na sua rede local. Ligue o Link público nas Configurações e ele funciona em qualquer lugar, até o Vice reiniciar e o endereço mudar.",
     "badgeLink": "Link",
     "badgeTunnel": "Rede",
     "moreTitle": "O resto pode ser encontrado nas configurações",

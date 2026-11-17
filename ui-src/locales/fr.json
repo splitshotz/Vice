@@ -458,7 +458,7 @@
     "linkTitle": "Copier le lien",
     "linkHelp": "Le bouton de lien sur un clip copie une adresse qui lit le clip dans un navigateur. Colle-la dans Discord et elle s'intègre.",
     "tunnelTitle": "En local, ou accessible de partout",
-    "tunnelHelp": "Tout seul, le lien ne fonctionne que sur cette machine. Active le tunnel Cloudflare dans Réglages et il fonctionne partout, jusqu'à ce que le daemon redémarre et que l'adresse change.",
+    "tunnelHelp": "Sans Lien public, il ne fonctionne que sur ton réseau local. Active Lien public dans Réglages et il fonctionne partout, jusqu'à ce que Vice redémarre et que l'adresse change.",
     "badgeLink": "Lien",
     "badgeTunnel": "Réseau",
     "moreTitle": "Le reste se trouve dans Réglages",

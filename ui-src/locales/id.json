@@ -445,7 +445,7 @@
     "linkTitle": "Salin tautan",
     "linkHelp": "Tombol tautan pada klip menyalin alamat untuk memutar klip di browser. Tempel ke Discord untuk menampilkan sematan video.",
     "tunnelTitle": "Lokal, atau dapat diakses dari mana saja",
-    "tunnelHelp": "Secara bawaan, tautan hanya berfungsi di komputer ini. Aktifkan tunnel Cloudflare di Pengaturan agar dapat diakses dari mana saja, sampai daemon dimulai ulang dan alamatnya berubah.",
+    "tunnelHelp": "Tanpa Tautan publik, tautan hanya berfungsi di jaringan rumah Anda. Aktifkan Tautan publik di Pengaturan agar berfungsi di mana saja, sampai Vice dimulai ulang dan alamatnya berubah.",
     "badgeLink": "Tautan",
     "badgeTunnel": "Daring",
     "moreTitle": "Selebihnya ada di Pengaturan",

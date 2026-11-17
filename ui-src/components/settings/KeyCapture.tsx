@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 
 import {MOD_CODES, codeToEvdev, comboFromEvent} from '../../lib/hotkeyCapture';
+import {comboLabel} from '../../lib/format';
 import {t} from '../../lib/i18n';
 
 /**
@@ -49,7 +50,7 @@ export function KeyCapture({
       data-listening={listening || undefined}
       data-compact={compact || undefined}
       onClick={() => setListening(true)}>
-      {listening ? t('keyCapture.pressKey') : value || t('keyCapture.setKey')}
+      {listening ? t('keyCapture.pressKey') : value ? comboLabel(value) : t('keyCapture.setKey')}
     </button>
   );
 }

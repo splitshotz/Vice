@@ -1,6 +1,6 @@
 import {useLayoutEffect, useMemo, useRef, useState} from 'react';
 
-import {hotkeyLabel} from '../lib/format';
+import {comboLabel} from '../lib/format';
 import {t} from '../lib/i18n';
 import {useImageActions} from '../state/imageActions';
 import {useStore} from '../state/store';
@@ -96,7 +96,7 @@ export function HomeImages() {
               </svg>
               <div>
                 <h3>{t(state.images.length ? 'images.roomForMore' : 'images.captureMoment')}</h3>
-                <p>{bound ? t('images.captureHint', {hotkey: hotkeyLabel(bound)}) : t('images.captureNoKey')}</p>
+                <p>{bound ? t('images.captureHint', {hotkey: comboLabel(bound)}) : t('images.captureNoKey')}</p>
                 {!bound ? <button type="button" className="btn btn-quiet btn-sm"
                   onClick={() => dispatch({type: 'setView', view: 'settings'})}>{t('home.settings')}</button> : null}
               </div>

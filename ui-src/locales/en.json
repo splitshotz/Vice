@@ -122,7 +122,7 @@
     "copyLinkTitle": "Copy this link",
     "copyLinkBody": "The clipboard was not available, so here is the link to copy by hand.",
     "restartTitle": "Restart Vice to finish",
-    "restartBody": "That setting is saved, but it only takes effect once the daemon restarts.",
+    "restartBody": "That setting is saved. It takes effect when Vice restarts.",
     "gotIt": "Got it"
   },
   "card": {
@@ -188,7 +188,7 @@
     "colour": "Playlist colour"
   },
   "frame": {
-    "quitConfirm": "Stop Vice and quit? The recording daemon will shut down.",
+    "quitConfirm": "Quit Vice? Recording stops until you open it again.",
     "minimize": "Minimize",
     "quit": "Quit"
   },
@@ -206,7 +206,7 @@
     "nvencGetFlatpak": "The Flatpak gpu-screen-recorder works with this driver. Install it with {command}, then choose it under Settings, Recording."
   },
   "island": {
-    "cannotReach": "Cannot reach the daemon",
+    "cannotReach": "Vice isn't responding",
     "notRecording": "Not recording",
     "keepsRetrying": "Vice keeps retrying",
     "sessionRecording": "Session recording",
@@ -291,9 +291,9 @@
     "errMoveHighlight": "Could not move the highlight",
     "errUpdateHighlight": "Could not update the highlight",
     "errDeleteHighlight": "Could not delete the highlight",
-    "daemonNoMark": "The daemon did not return the mark",
-    "daemonRejectedMove": "The daemon rejected the move",
-    "daemonRejectedChange": "The daemon rejected the change",
+    "daemonNoMark": "The highlight wasn't saved",
+    "daemonRejectedMove": "The highlight wasn't moved",
+    "daemonRejectedChange": "The change wasn't saved",
     "play": "Play",
     "pause": "Pause",
     "preparingPreview": "Preparing the H.265 preview",
@@ -473,7 +473,7 @@
     "linkTitle": "Copy link",
     "linkHelp": "Copies a link that plays the clip in a browser. Paste it into Discord and it embeds.",
     "tunnelTitle": "Local, or reachable from anywhere",
-    "tunnelHelp": "On its own the link only works on this machine. Turn on the Cloudflare tunnel in Settings and it works anywhere, until the daemon restarts and the address changes.",
+    "tunnelHelp": "Without Public link it only works on your home network. Turn Public link on in Settings and it works anywhere, until Vice restarts and the address changes.",
     "badgeLink": "Link",
     "badgeTunnel": "Net",
     "moreTitle": "The rest lives in Settings",

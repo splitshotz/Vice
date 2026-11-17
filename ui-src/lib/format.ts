@@ -57,6 +57,25 @@ export function hotkeyLabel(key: string | undefined | null): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
+// Either side's modifier fires a binding, so a combo names neither side.
+const MODIFIER_LABELS: Record<string, string> = {
+  CTRL: 'Ctrl',
+  ALT: 'Alt',
+  SHIFT: 'Shift',
+  META: 'Super',
+};
+
+/** A whole binding as people write it: KEY_LEFTALT+KEY_F9 is Alt+F9. */
+export function comboLabel(combo: string): string {
+  const parts = combo.split('+').filter(Boolean);
+  return parts
+    .map(part => {
+      const side = /^KEY_(?:LEFT|RIGHT)(CTRL|ALT|SHIFT|META)$/.exec(part);
+      return side && parts.length > 1 ? MODIFIER_LABELS[side[1]] : hotkeyLabel(part);
+    })
+    .join('+');
+}
+
 /** Takes the daemon's ISO timestamps, which carry no timezone suffix. */
 export function relativeTime(isoTimestamp: string | null | undefined): string {
   if (!isoTimestamp) return '';
