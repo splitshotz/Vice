@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import array
 import asyncio
+import hashlib
 import io
 import logging
 import math
@@ -290,6 +291,98 @@ async def _run_player(player: str, sound: Path) -> Optional[str]:
     return (stderr or b"").decode(errors="replace").strip()[:200] or f"exit code {proc.returncode}"
 
 
+# Custom files the player refused, and the converted copy that plays instead.
+_converted: dict[tuple[str, int, int], Optional[Path]] = {}
+
+
+def _custom_key(sound: Path) -> Optional[tuple[str, int, int]]:
+    try:
+        st = sound.stat()
+    except OSError as exc:
+        log.debug("Notification sound %s cannot be read: %s", sound, exc)
+        return None
+    return (str(sound), st.st_mtime_ns, st.st_size)
+
+
+async def _convert_custom(sound: Path, key: tuple[str, int, int]) -> Optional[Path]:
+    """A 48 kHz stereo WAV of *sound* made with ffmpeg, or None.
+
+    paplay and aplay only read what libsndfile does, and a sound downloaded
+    as ".wav" is often AAC, Opus or MP3 inside (#297). ffmpeg reads those.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        log.warning("Notification sound %s needs converting and ffmpeg is not installed", sound)
+        return None
+    digest = hashlib.sha1(repr(key).encode()).hexdigest()[:16]
+    target = _TMP_DIR / f"snd_custom_{digest}.wav"
+    partial = _TMP_DIR / f"snd_custom_{digest}.{os.getpid()}.part.wav"
+    try:
+        _TMP_DIR.mkdir(parents=True, exist_ok=True)
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(sound),
+            # The player is stopped after ten seconds anyway.
+            "-vn", "-t", "10", "-ac", str(_CHANNELS), "-ar", str(_SR),
+            "-c:a", "pcm_s16le", "-f", "wav", str(partial),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            stderr = b"ffmpeg took too long"
+        # 44 bytes is a WAV header with no samples: a file with no audio in it.
+        if proc.returncode != 0 or not partial.is_file() or partial.stat().st_size <= 44:
+            reason = (stderr or b"").decode(errors="replace").strip()[:200] or "no audio in it"
+            log.warning("Notification sound %s could not be converted (%s)", sound, reason)
+            partial.unlink(missing_ok=True)
+            return None
+        partial.replace(target)
+    except OSError as exc:
+        log.warning("Notification sound %s could not be converted (%s)", sound, exc)
+        return None
+    return target
+
+
+async def _play_custom(player: str, sound: Path) -> bool:
+    """Play the user's own file. False means the tone should play instead."""
+    key = _custom_key(sound)
+    if key is not None and key in _converted:
+        ready = _converted[key]
+        if ready is None:
+            return False
+        if ready.is_file() and await _run_player(player, ready) is None:
+            return True
+        # /tmp was cleaned under us, or the copy stopped playing: start over.
+        del _converted[key]
+
+    problem = await _run_player(player, sound)
+    if problem is None:
+        return True
+    if key is None:
+        log.warning("Notification sound %s would not play (%s), using the built-in tone",
+                    sound, problem)
+        return False
+
+    ready = await _convert_custom(sound, key)
+    if ready is not None:
+        second = await _run_player(player, ready)
+        if second is None:
+            log.info("Notification sound %s is not a format %s reads (%s); playing a converted copy",
+                     sound, Path(player).name, problem)
+            _converted[key] = ready
+            return True
+        problem = f"{problem}; converted copy: {second}"
+    # Remembered, so a file that cannot be used costs one attempt, not one
+    # per clip, and the tone is not late every time.
+    _converted[key] = None
+    log.warning("Notification sound %s would not play (%s), using the built-in tone",
+                sound, problem)
+    return False
+
+
 async def _play(name: str, volume: float, custom: Optional[str] = None,
                 pack: str = CLASSIC) -> None:
     player = _find_player()
@@ -298,12 +391,8 @@ async def _play(name: str, volume: float, custom: Optional[str] = None,
         return
 
     sound = resolve_custom_sound(custom)
-    if sound is not None:
-        problem = await _run_player(player, sound)
-        if problem is None:
-            return
-        log.warning("Notification sound %s would not play (%s), using the built-in tone",
-                    sound, problem)
+    if sound is not None and await _play_custom(player, sound):
+        return
 
     pack = normalize_pack(pack)
     wav_data = _wav_for(name, volume, pack)
