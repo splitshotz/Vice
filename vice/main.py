@@ -39,7 +39,7 @@ from . import __version__
 from .active_window import steam_game_name
 from .session_process import ProcessIdentity, bind_game_process, probe_game_process
 from .active_window import scan_game_windows, auto_start_scan_supported
-from .session_auto_start import AutoStartStateError, MalformedAutoStartState, SuppressionStore, read_host_boot_id
+from .session_auto_start import AutoStartStateError, MalformedAutoStartState, UnreadableAutoStartState, SuppressionStore, read_host_boot_id
 from .config import (
     CLIP_DURATION_MIN,
     Config,
@@ -1848,13 +1848,18 @@ class ViceDaemon:
                 store = SuppressionStore(boot_id)
                 try:
                     saved, version = await asyncio.to_thread(store.load_snapshot)
-                except MalformedAutoStartState:
-                    log.exception('Malformed automatic-session suppression state')
+                except (MalformedAutoStartState, UnreadableAutoStartState) as exc:
+                    unreadable = isinstance(exc, UnreadableAutoStartState)
+                    description = 'Unreadable' if unreadable else 'Malformed'
+                    log.exception('%s automatic-session suppression state', description)
                     try:
-                        backup = await asyncio.to_thread(store.backup_corrupt)
-                        log.warning('Preserved malformed suppression state at %s', backup)
+                        backup = await asyncio.to_thread(
+                            store.backup_unreadable if unreadable else store.backup_corrupt,
+                        )
+                        log.warning('Preserved %s suppression state at %s', description.lower(), backup)
                     except (AutoStartStateError, OSError):
-                        log.exception('Could not preserve malformed suppression state; attempting replacement')
+                        log.exception('Could not preserve %s suppression state; attempting replacement',
+                                      description.lower())
                     saved, version = set(), 1
                     self._auto_start_dirty = True
                 changed = bool(saved - self._auto_start_suppressed)
@@ -1889,8 +1894,11 @@ class ViceDaemon:
 
     async def _save_auto_start_suppression(
         self, identities: set[ProcessIdentity], *, merge: bool = False,
+        manual_stop: bool = False,
     ) -> bool:
         async with self._auto_start_io_lock:
+            if manual_stop and not self.cfg.recording.session_start_on_game_detect:
+                return False
             # Manual stops can wait behind an initial load. Merge under the
             # same lock so newly loaded identities survive.
             if merge:
@@ -1926,7 +1934,7 @@ class ViceDaemon:
         return list(targets.values()), focused
 
     async def _suppress_manually_stopped_session(self) -> None:
-        if not (self.cfg.recording.session_start_on_game_detect or self._auto_start_store):
+        if not self.cfg.recording.session_start_on_game_detect:
             return
         # Capture the identity before any storage I/O can fail or suspend us.
         identity = getattr(self, "_session_process_identity", None)
@@ -1936,8 +1944,12 @@ class ViceDaemon:
             try:
                 scan = await asyncio.to_thread(self._scan_auto_start_targets, require_identities=True)
             except Exception:
+                if not self.cfg.recording.session_start_on_game_detect:
+                    return
                 scan = None
                 log.exception("Cannot identify games during manual session stop")
+            if not self.cfg.recording.session_start_on_game_detect:
+                return
             if scan is None:
                 # Invalidate an in-flight observation, but remember no stop intent.
                 self._auto_start_generation += 1
@@ -1945,7 +1957,7 @@ class ViceDaemon:
                 await self._set_auto_start_error('detection')
                 return
             stopped = {target.identity for target in scan[0]}
-        await self._save_auto_start_suppression(stopped, merge=True)
+        await self._save_auto_start_suppression(stopped, merge=True, manual_stop=True)
 
     async def _sync_auto_start_task(self) -> None:
         self._init_auto_start()

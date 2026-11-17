@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import errno
 import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import uuid
@@ -29,6 +31,10 @@ class AutoStartStateError(RuntimeError):
 
 class MalformedAutoStartState(AutoStartStateError):
     """State is structurally invalid, rather than inaccessible."""
+
+
+class UnreadableAutoStartState(AutoStartStateError):
+    """An owned regular state file explicitly denies read access."""
 
 
 def read_host_boot_id() -> str:
@@ -79,6 +85,18 @@ class SuppressionStore:
         except UnicodeError as exc:
             raise MalformedAutoStartState(f"Auto-start state is malformed: {exc}") from exc
         except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EPERM):
+                try:
+                    info = self.path.lstat()
+                except OSError:
+                    pass
+                else:
+                    if (stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                            and not os.access(self.path, os.R_OK, effective_ids=True)):
+                        raise UnreadableAutoStartState(
+                            f"Cannot read owned state file {self.path} "
+                            f"(mode {stat.S_IMODE(info.st_mode):04o}): {exc}"
+                        ) from exc
             raise AutoStartStateError(f"Could not read auto-start state: {exc}") from exc
 
         try:
@@ -137,6 +155,15 @@ class SuppressionStore:
                 except OSError:
                     log.debug("Could not remove incomplete diagnostic backup", exc_info=True)
             raise AutoStartStateError(f"Could not preserve malformed state: {exc}") from exc
+
+    def backup_unreadable(self) -> Path:
+        """Retain unreadable bytes and permissions without moving the state file."""
+        backup = self.path.with_name(f".{self.path.name}.unreadable.{uuid.uuid4().hex}.bak")
+        try:
+            os.link(self.path, backup, follow_symlinks=False)
+        except OSError as exc:
+            raise AutoStartStateError(f"Could not preserve unreadable state: {exc}") from exc
+        return backup
 
     def save(self, identities: set[ProcessIdentity]) -> None:
         if not isinstance(identities, set) or any(
