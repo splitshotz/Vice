@@ -1006,7 +1006,7 @@
       },
       "voiceLength": {
         "title": "Say how long",
-        "body": "\"Vice, clip last 30 seconds\" saves that length."
+        "body": "With voice clipping on, \"Vice, clip last 30 seconds\" saves that length."
       },
       "discordSize": {
         "title": "Discord copies for Nitro",
