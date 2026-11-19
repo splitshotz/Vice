@@ -38,11 +38,12 @@ ActiveWindow = dict  # {"process": str, "class": str, "pid": int, "window_id": s
 
 @dataclass
 class WindowScan:
-    """A successful background window scan, including a possibly empty set."""
+    """Background scan outcome; failures retain metadata but discard windows."""
 
     windows: list[ActiveWindow]
     focused_window_id: str | None
     used_x11_fallback: bool = False
+    failed: bool = False
 
 
 # Compositor tools that only exist on the host, never inside the Flatpak.
@@ -488,20 +489,20 @@ def _scan_x11_game_windows() -> WindowScan | None:
 
     output = run(["xdotool", "search", "--class", ".*"], timeout=4.0)
     if output is None:
-        return None
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
     raw_ids = output.split()
     ids: list[tuple[str, str]] = []
     for raw_id in raw_ids:
         window_id = _canonical_x_window_id(raw_id)
         if window_id is None:
-            return None
+            return WindowScan([], None, used_x11_fallback=True, failed=True)
         ids.append((raw_id, window_id))
 
     windows: list[ActiveWindow] = []
     for raw_id, window_id in ids:
         properties = run(["xprop", "-id", raw_id, "_NET_WM_PID", "WM_CLASS"], timeout=1.5)
         if properties is None:
-            return None
+            return WindowScan([], None, used_x11_fallback=True, failed=True)
         pid = 0
         cls = ""
         for line in properties.splitlines():
@@ -509,9 +510,9 @@ def _scan_x11_game_windows() -> WindowScan | None:
                 try:
                     pid = int(line.split("=", 1)[1].strip())
                 except ValueError:
-                    return None
+                    return WindowScan([], None, used_x11_fallback=True, failed=True)
                 if pid < 0:
-                    return None
+                    return WindowScan([], None, used_x11_fallback=True, failed=True)
             elif line.startswith("WM_CLASS"):
                 cls = _parse_wm_class(line)
         proc = _process_comm_for_pid(pid)
@@ -524,12 +525,12 @@ def _scan_x11_game_windows() -> WindowScan | None:
             })
 
     if ids and not windows:
-        return None
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
 
     focused_id = None
     active = run(["xdotool", "getactivewindow"], timeout=1.5)
     if time.monotonic() >= deadline:
-        return None
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
     if active is not None:
         focused_id = _canonical_x_window_id(active.strip())
     return WindowScan(

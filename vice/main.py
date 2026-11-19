@@ -1917,6 +1917,8 @@ class ViceDaemon:
         scan = scan_game_windows()
         if scan is None:
             return None
+        if scan.failed:
+            return ([], None, scan.used_x11_fallback) if not require_identities else None
         targets = {}
         focused = None
         for win in scan.windows:

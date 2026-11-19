@@ -83,6 +83,38 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.daemon._auto_start_interval(True), 8.0)
         self.assertEqual(self.daemon._auto_start_interval(False), 2.0)
 
+    async def test_failed_fallback_uses_slow_interval_without_false_detection(self):
+        self.scan.return_value = WindowScan([self.win], None, used_x11_fallback=True, failed=True)
+        self.assertTrue(await self.daemon._auto_start_tick())
+        self.assertTrue(await self.daemon._auto_start_tick())
+        self.assertFalse(self.daemon._session_active)
+        self.bind.assert_not_called()
+        self.assertIsNone(self.daemon._scan_auto_start_targets(require_identities=True))
+        self.assertEqual(self.daemon._auto_start_interval(True), 8.0)
+
+    async def test_polling_loop_waits_after_successful_failed_and_timed_out_scans(self):
+        for name, scan, interval in (
+            ('successful fallback', WindowScan([], None, used_x11_fallback=True), 8.0),
+            ('failed fallback', WindowScan([], None, used_x11_fallback=True, failed=True), 8.0),
+            ('normal X11 or KDE', WindowScan([], None), 2.0),
+        ):
+            with self.subTest(name=name):
+                self.scan.reset_mock()
+                self.scan.return_value = scan
+                waits = []
+
+                async def wait_once(awaitable, timeout):
+                    awaitable.close()
+                    waits.append(timeout)
+                    if len(waits) == 1:
+                        raise asyncio.TimeoutError
+
+                with mock.patch('vice.main.asyncio.wait_for', side_effect=wait_once):
+                    await self.daemon._auto_start_loop()
+                self.assertEqual(waits, [interval, interval])
+                self.assertEqual(self.scan.call_count, 2)
+                self.assertFalse(self.daemon._session_active)
+
     async def test_default_off_does_not_scan_or_read_state(self):
         self.daemon.cfg.recording.session_start_on_game_detect = False
         await self.daemon._sync_auto_start_task()

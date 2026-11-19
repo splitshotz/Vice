@@ -238,7 +238,10 @@ class X11WindowScanTests(unittest.TestCase):
     def test_empty_wmctrl_does_not_hide_failed_fallback(self):
         with mock.patch.object(aw.shutil, "which", return_value="/tool"), \
              mock.patch.object(aw, "_run_scan_command", side_effect=["", None]):
-            self.assertIsNone(aw.scan_game_windows())
+            self.assertEqual(
+                aw.scan_game_windows(),
+                aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+            )
 
     def test_wmctrl_failure_is_not_misreported_as_empty(self):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: "/usr/bin/wmctrl" if name == "wmctrl" else None), \
@@ -299,7 +302,24 @@ class X11WindowScanTests(unittest.TestCase):
 
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else f"/usr/bin/{name}"), \
              mock.patch.object(aw, "_run_scan_command", side_effect=run):
-            self.assertIsNone(aw.scan_game_windows())
+            self.assertEqual(
+                aw.scan_game_windows(),
+                aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+            )
+
+    def test_fallback_timeout_is_a_failed_scan_with_fallback_metadata(self):
+        clock = [0.0]
+
+        def run(command, timeout=3.0):
+            clock[0] += timeout
+            return "7" if command[0] == "xdotool" else None
+
+        with mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else "/tool"), \
+             mock.patch.object(aw.time, "monotonic", side_effect=lambda: clock[0]), \
+             mock.patch.object(aw, "_run_scan_command", side_effect=run):
+            scan = aw.scan_game_windows()
+
+        self.assertEqual(scan, aw.WindowScan([], None, used_x11_fallback=True, failed=True))
 
     def test_missing_class_retains_process_and_missing_focus_is_optional(self):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else "/tool"), \
@@ -319,7 +339,10 @@ class X11WindowScanTests(unittest.TestCase):
                  mock.patch.object(aw, "_run_scan_command", side_effect=[
                      "7", f'_NET_WM_PID(CARDINAL) = {pid}\nWM_CLASS(STRING) = "game", "Game"',
                  ]):
-                self.assertIsNone(aw.scan_game_windows())
+                self.assertEqual(
+                    aw.scan_game_windows(),
+                    aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+                )
 
     def test_fallback_deadline_bounds_work_and_discards_partial_results(self):
         clock = [0.0]
@@ -333,7 +356,10 @@ class X11WindowScanTests(unittest.TestCase):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else "/tool"), \
              mock.patch.object(aw.time, "monotonic", side_effect=lambda: clock[0]), \
              mock.patch.object(aw, "_run_scan_command", side_effect=run) as commands:
-            self.assertIsNone(aw.scan_game_windows())
+            self.assertEqual(
+                aw.scan_game_windows(),
+                aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+            )
         self.assertEqual(clock[0], 5.0)
         self.assertEqual([call.kwargs["timeout"] for call in commands.call_args_list],
                          [4.0, 1.5, 1.5, 0.5])
@@ -348,7 +374,10 @@ class X11WindowScanTests(unittest.TestCase):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else "/tool"), \
              mock.patch.object(aw.time, "monotonic", side_effect=lambda: clock[0]), \
              mock.patch.object(aw, "_run_scan_command", side_effect=run) as commands:
-            self.assertIsNone(aw.scan_game_windows())
+            self.assertEqual(
+                aw.scan_game_windows(),
+                aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+            )
         self.assertEqual([call.kwargs["timeout"] for call in commands.call_args_list], [4.0, 1.0])
 
     def test_xdotool_error_and_malformed_ids_are_failures(self):
@@ -356,7 +385,10 @@ class X11WindowScanTests(unittest.TestCase):
             with self.subTest(output=output), \
                  mock.patch.object(aw.shutil, "which", side_effect=lambda name: None if name == "wmctrl" else f"/usr/bin/{name}"), \
                  mock.patch.object(aw, "_run_scan_command", return_value=output):
-                self.assertIsNone(aw.scan_game_windows())
+                self.assertEqual(
+                    aw.scan_game_windows(),
+                    aw.WindowScan([], None, used_x11_fallback=True, failed=True),
+                )
 
     def test_supported_checks_adapter_and_tools(self):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: "/usr/bin/wmctrl" if name == "wmctrl" else None):
