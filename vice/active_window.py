@@ -42,6 +42,7 @@ class WindowScan:
 
     windows: list[ActiveWindow]
     focused_window_id: str | None
+    used_x11_fallback: bool = False
 
 
 # Compositor tools that only exist on the host, never inside the Flatpak.
@@ -531,7 +532,11 @@ def _scan_x11_game_windows() -> WindowScan | None:
         return None
     if active is not None:
         focused_id = _canonical_x_window_id(active.strip())
-    return WindowScan(windows=windows, focused_window_id=focused_id)
+    return WindowScan(
+        windows=windows,
+        focused_window_id=focused_id,
+        used_x11_fallback=True,
+    )
 
 
 def _scan_kde_game_windows() -> WindowScan | None:

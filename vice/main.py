@@ -191,6 +191,7 @@ WINDOW_CAPTURE_INTERVAL = 5.0
 SESSION_GAME_POLL_INTERVAL = 1.0
 SESSION_GAME_EXIT_DELAY = 5.0
 SESSION_AUTO_START_INTERVAL = 2.0
+SESSION_AUTO_START_FALLBACK_INTERVAL = 8.0
 
 
 @dataclass(frozen=True)
@@ -1912,7 +1913,7 @@ class ViceDaemon:
 
     def _scan_auto_start_targets(
         self, *, require_identities: bool = False,
-    ) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity]]]:
+    ) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool]]:
         scan = scan_game_windows()
         if scan is None:
             return None
@@ -1931,7 +1932,23 @@ class ViceDaemon:
             targets.setdefault(identity, AutoStartTarget(game, win, identity))
             if win.get("window_id") == scan.focused_window_id:
                 focused = identity
-        return list(targets.values()), focused
+        return list(targets.values()), focused, scan.used_x11_fallback
+
+    @staticmethod
+    def _scan_targets_result(
+        result: tuple,
+    ) -> tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool]:
+        """Accept older two-item test doubles while scans gain metadata."""
+        if len(result) == 2:
+            targets, focused = result
+            return targets, focused, False
+        targets, focused, used_fallback = result
+        return targets, focused, used_fallback
+
+    @staticmethod
+    def _auto_start_interval(used_fallback: bool) -> float:
+        return (SESSION_AUTO_START_FALLBACK_INTERVAL
+                if used_fallback else SESSION_AUTO_START_INTERVAL)
 
     async def _suppress_manually_stopped_session(self) -> None:
         if not self.cfg.recording.session_start_on_game_detect:
@@ -1989,26 +2006,30 @@ class ViceDaemon:
             while (self.cfg.recording.session_start_on_game_detect
                    and not self._auto_start_shutdown):
                 try:
-                    await self._auto_start_tick()
+                    used_fallback = await self._auto_start_tick()
                 except Exception:
                     self._auto_start_pending = None
                     log.exception("Automatic game detection failed")
                     await self._set_auto_start_error("detection")
+                    used_fallback = False
                 try:
-                    await asyncio.wait_for(self._auto_start_wake.wait(), SESSION_AUTO_START_INTERVAL)
+                    await asyncio.wait_for(
+                        self._auto_start_wake.wait(),
+                        self._auto_start_interval(used_fallback),
+                    )
                     break
                 except asyncio.TimeoutError:
                     pass
         finally:
             self._auto_start_pending = None
 
-    async def _auto_start_tick(self) -> None:
+    async def _auto_start_tick(self) -> bool:
         if not self.cfg.recording.session_start_on_game_detect or self._auto_start_shutdown:
             self._auto_start_pending = None
-            return
+            return False
         if not await self._ensure_auto_start_store():
             self._auto_start_pending = None
-            return
+            return False
         # A disappearing window is not process exit. Only the process probe
         # may release suppression or attempt limits, including across scans.
         probe_generation = self._auto_start_generation
@@ -2021,7 +2042,7 @@ class ViceDaemon:
             async with self._session_lock:
                 if probe_generation != self._auto_start_generation:
                     self._auto_start_pending = None
-                    return
+                    return False
                 for identity in expired:
                     self._auto_start_attempts.pop(identity, None)
                 remaining = self._auto_start_suppressed - expired
@@ -2030,17 +2051,17 @@ class ViceDaemon:
                         remaining,
                     ):
                         self._auto_start_pending = None
-                        return
+                        return False
         if self._session_active or not self._ready:
             self._auto_start_pending = None
-            return
+            return False
         if self._auto_start_storage_failed or self._auto_start_dirty:
             self._auto_start_pending = None
-            return
+            return False
         if not await asyncio.to_thread(auto_start_scan_supported):
             self._auto_start_pending = None
             await self._set_auto_start_error("unsupported")
-            return
+            return False
         scan_generation = self._auto_start_generation
         scan = await asyncio.to_thread(self._scan_auto_start_targets)
         async with self._session_lock:
@@ -2048,15 +2069,15 @@ class ViceDaemon:
                     or not self.cfg.recording.session_start_on_game_detect
                     or self._auto_start_shutdown or self._session_active or not self._ready):
                 self._auto_start_pending = None
-                return
+                return False
             if self._auto_start_storage_failed or self._auto_start_dirty:
                 self._auto_start_pending = None
-                return
+                return False
             if scan is None:
                 self._auto_start_pending = None
                 await self._set_auto_start_error('detection')
-                return
-            targets, focused = scan
+                return False
+            targets, focused, used_fallback = self._scan_targets_result(scan)
             await self._set_auto_start_error(None)
             selected = targets[0] if len(targets) == 1 else next(
                 (target for target in targets if target.identity == focused), None)
@@ -2065,6 +2086,7 @@ class ViceDaemon:
             self._auto_start_pending = identity
         if selected is not None and identity == previous:
             await self._change_session(True, automatic_target=selected)
+        return used_fallback
 
     def _automatic_start_allowed(self, target: AutoStartTarget) -> bool:
         attempts, retry_at = self._auto_start_attempts.get(target.identity, (0, 0.0))

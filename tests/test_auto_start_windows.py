@@ -184,7 +184,7 @@ class X11WindowScanTests(unittest.TestCase):
     def test_successful_empty_wmctrl_scan_is_valid(self):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"), \
              mock.patch.object(aw, "_run_scan_command", return_value=""):
-            self.assertEqual(aw.scan_game_windows(), aw.WindowScan([], None))
+            self.assertEqual(aw.scan_game_windows(), aw.WindowScan([], None, used_x11_fallback=True))
 
     def test_empty_wmctrl_without_fallback_is_still_a_successful_empty_scan(self):
         with mock.patch.object(aw.shutil, "which", side_effect=lambda name: "/usr/bin/wmctrl" if name == "wmctrl" else None), \
@@ -211,7 +211,29 @@ class X11WindowScanTests(unittest.TestCase):
                     scan = aw.scan_game_windows()
                 self.assertEqual(scan, aw.WindowScan([
                     {"process": "game", "class": "Game", "pid": 42, "window_id": "0xa"},
-                ], "0xa"))
+                ], "0xa", used_x11_fallback=True))
+
+    def test_expensive_x11_fallback_is_marked(self):
+        def run(command, timeout=3.0):
+            if command == ["wmctrl", "-lpx"]:
+                return ""
+            if command == ["xdotool", "search", "--class", ".*"]:
+                return "7"
+            if command[0] == "xprop":
+                return '_NET_WM_PID(CARDINAL) = 42\nWM_CLASS(STRING) = "game", "Game"'
+            if command == ["xdotool", "getactivewindow"]:
+                return "7"
+            raise AssertionError(command)
+
+        with mock.patch.object(aw.shutil, "which", return_value="/tool"), \
+             mock.patch.object(aw, "_run_scan_command", side_effect=run), \
+             mock.patch.object(aw, "_read_proc_comm", return_value="game"):
+            scan = aw.scan_game_windows()
+
+        self.assertTrue(scan.used_x11_fallback)
+
+    def test_native_and_direct_wmctrl_scans_are_not_marked_expensive(self):
+        self.assertFalse(aw.WindowScan([], None).used_x11_fallback)
 
     def test_empty_wmctrl_does_not_hide_failed_fallback(self):
         with mock.patch.object(aw.shutil, "which", return_value="/tool"), \
@@ -288,7 +310,7 @@ class X11WindowScanTests(unittest.TestCase):
             scan = aw.scan_game_windows()
         self.assertEqual(scan, aw.WindowScan([
             {"process": "game", "class": "", "pid": 42, "window_id": "0x7"},
-        ], None))
+        ], None, used_x11_fallback=True))
 
     def test_malformed_or_negative_pid_fails_scan(self):
         for pid in ("broken", "-1", "42, 43"):

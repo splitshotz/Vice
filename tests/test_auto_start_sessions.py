@@ -68,10 +68,20 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d._session_process_identity, self.identities[42])
         self.assertIsNone(getattr(d, '_session_monitor_task', None))
         await asyncio.sleep(0)
+
         events = [call.args[0] for call in d.share.broadcast.call_args_list]
         start = next(event for event in events if event['type'] == 'session_start')
         self.assertEqual(start['origin'], 'automatic')
         self.assertEqual(start['auto_stop'], 'off')
+
+    async def test_auto_start_tick_reports_expensive_x11_fallback(self):
+        self.scan.return_value = WindowScan([self.win], None, used_x11_fallback=True)
+        self.assertTrue(await self.daemon._auto_start_tick())
+
+        self.scan.return_value = WindowScan([self.win], None)
+        self.assertFalse(await self.daemon._auto_start_tick())
+        self.assertEqual(self.daemon._auto_start_interval(True), 8.0)
+        self.assertEqual(self.daemon._auto_start_interval(False), 2.0)
 
     async def test_default_off_does_not_scan_or_read_state(self):
         self.daemon.cfg.recording.session_start_on_game_detect = False
