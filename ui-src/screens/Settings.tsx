@@ -48,6 +48,12 @@ import {
   type RowNote,
 } from '../components/settings/Fields';
 
+const SESSION_AUTO_START_ERRORS = {
+  unsupported: 'settings.sessionAutoStartErrorUnsupported',
+  detection: 'settings.sessionAutoStartErrorDetection',
+  state: 'settings.sessionAutoStartErrorState',
+} as const;
+
 const SECTIONS = [
   ['recording', 'settings.secRecording'],
   ['audio', 'settings.secAudio'],
@@ -351,6 +357,12 @@ export function Settings() {
   // not just configured (backend can be "auto").
   const windowCaptureBackend = draft.backend === 'gsr' || status.backend === 'gpu-screen-recorder';
   const windowCaptureSupported = windowCaptureBackend && !status.window_capture_unavailable;
+  const sessionAutoStartNote: RowNote | null = status.session_auto_start_error
+    ? {
+        text: t(SESSION_AUTO_START_ERRORS[status.session_auto_start_error]),
+        tone: 'warning',
+      }
+    : null;
 
   return (
     <div className="settings">
@@ -377,6 +389,27 @@ export function Settings() {
       <div className="settings-body" ref={bodyRef}>
         {/* ── Recording ─────────────────────────────────────────── */}
         <Card id="recording" title={t('settings.secRecording')} register={register('recording')}>
+          <Row
+            label={t('settings.sessionStartOnGameDetect')}
+            help={t('settings.sessionStartOnGameDetectHelp')}
+            note={sessionAutoStartNote}>
+            <Toggle
+              label={t('settings.sessionStartOnGameDetect')}
+              checked={draft.sessionStartOnGameDetect}
+              onChange={sessionStartOnGameDetect => update({sessionStartOnGameDetect})}
+            />
+          </Row>
+
+          <Row
+            label={t('settings.sessionStopOnGameExit')}
+            help={t('settings.sessionStopOnGameExitHelp')}>
+            <Toggle
+              label={t('settings.sessionStopOnGameExit')}
+              checked={draft.sessionStopOnGameExit}
+              onChange={sessionStopOnGameExit => update({sessionStopOnGameExit})}
+            />
+          </Row>
+
           <Row label={t('settings.bufferDuration')} note={buffer}>
             <Slider
               label={t('settings.bufferDuration')}

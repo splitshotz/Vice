@@ -82,6 +82,11 @@ def normalize_combo(combo: str) -> str:
 
 @dataclass
 class RecordingConfig:
+    # Start a session when a supported game is detected in the foreground.
+    session_start_on_game_detect: bool = False
+    # Stop a session five seconds after the game process active at session
+    # start exits. Disabled by default to preserve manual session control.
+    session_stop_on_game_exit: bool = False
     # How many seconds to keep in the rolling buffer.
     buffer_duration: int = 120
     # How many seconds to save when you hit the clip hotkey.

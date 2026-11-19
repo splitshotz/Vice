@@ -19,6 +19,10 @@ import logging
 import os
 import re
 import subprocess
+import shutil
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -32,8 +36,33 @@ ActiveWindow = dict  # {"process": str, "class": str, "pid": int, "window_id": s
 # caller can pin capture without asking X11 for focus a second time.
 
 
+@dataclass
+class WindowScan:
+    """Background scan outcome; failures retain metadata but discard windows."""
+
+    windows: list[ActiveWindow]
+    focused_window_id: str | None
+    used_x11_fallback: bool = False
+    failed: bool = False
+
+
 # Compositor tools that only exist on the host, never inside the Flatpak.
 _HOST_TOOLS = frozenset({"hyprctl", "swaymsg", "niri", "kdotool"})
+
+_KDE_GAME_WINDOW_SCRIPT = """
+var windows = workspace.windowList().map(function (w) {
+    return {
+        window_id: w.internalId.toString(),
+        pid: w.pid,
+        class: w.resourceClass
+    };
+});
+var active = workspace.activeWindow;
+output_result(JSON.stringify({
+    windows: windows,
+    focused_window_id: active ? active.internalId.toString() : null
+}));
+""".strip()
 
 
 def _read_proc_comm(pid: int) -> str:
@@ -90,6 +119,32 @@ def _run(cmd: list[str], timeout: float = 1.0) -> str:
         return result.stdout
     except Exception:
         return ""
+
+
+def _run_scan_command(cmd: list[str], timeout: float = 3.0) -> str | None:
+    """Run one scanner command; None means failure, empty text is success."""
+    if cmd and cmd[0] in _HOST_TOOLS:
+        cmd = host_argv(cmd)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", exc)
+        return None
+    if result.returncode != 0:
+        # xdotool search uses status 1 for a successful search with no matches.
+        # Keep transport errors (including a missing display) as failures.
+        if (cmd == ["xdotool", "search", "--class", ".*"]
+                and result.returncode == 1
+                and not result.stdout.strip() and not result.stderr.strip()):
+            return ""
+        log.debug("Window scan command failed (%s): %s", cmd[0] if cmd else "", result.stderr)
+        return None
+    return result.stdout
 
 
 # ─── Hyprland ───────────────────────────────────────────────────────────────
@@ -353,6 +408,252 @@ def list_candidate_windows() -> list[ActiveWindow]:
     except Exception as exc:
         log.debug("candidate window scan raised: %s", exc)
         return []
+
+
+def _canonical_x_window_id(raw: str) -> str | None:
+    try:
+        value = int(raw, 0)
+    except ValueError:
+        try:
+            value = int(raw, 10)
+        except ValueError:
+            return None
+    return f"0x{value:x}" if value >= 0 else None
+
+
+def _process_comm_for_pid(pid: int) -> str:
+    return _read_proc_comm(pid) if pid > 0 else ""
+
+
+def _parse_wmctrl_scan(raw: str) -> WindowScan | None:
+    windows: list[ActiveWindow] = []
+    for line in raw.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            return None
+        window_id = _canonical_x_window_id(parts[0])
+        if window_id is None:
+            return None
+        try:
+            pid = int(parts[2])
+        except ValueError:
+            return None
+        if pid < 0:
+            return None
+        cls = parts[3].split(".")[-1]
+        windows.append({
+            "process": _process_comm_for_pid(pid),
+            "class": cls,
+            "pid": pid,
+            "window_id": window_id,
+        })
+
+    focused_id = None
+    if shutil.which("xdotool"):
+        active = _run_scan_command(["xdotool", "getactivewindow"], timeout=1.5)
+        if active is not None:
+            focused_id = _canonical_x_window_id(active.strip())
+    return WindowScan(windows=windows, focused_window_id=focused_id)
+
+
+def _parse_wm_class(raw: str) -> str:
+    if "=" not in raw:
+        return ""
+    rhs = raw.split("=", 1)[1].strip()
+    parts = [part.strip().strip('"') for part in rhs.split(",")]
+    return (parts[-1] or parts[0]) if parts else ""
+
+
+def _scan_x11_game_windows() -> WindowScan | None:
+    empty_wmctrl = False
+    if shutil.which("wmctrl"):
+        output = _run_scan_command(["wmctrl", "-lpx"], timeout=3.0)
+        if output is not None:
+            if output.strip():
+                return _parse_wmctrl_scan(output)
+            empty_wmctrl = True
+        log.debug("wmctrl scan empty or failed; trying xdotool fallback")
+
+    if not (shutil.which("xdotool") and shutil.which("xprop")):
+        return WindowScan([], None) if empty_wmctrl else None
+
+    # Bound the whole fallback, rather than spending a full timeout on each
+    # window while clients are disappearing or the X server is unresponsive.
+    deadline = time.monotonic() + 5.0
+
+    def run(command: list[str], timeout: float) -> str | None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        return _run_scan_command(command, timeout=min(timeout, remaining))
+
+    output = run(["xdotool", "search", "--class", ".*"], timeout=4.0)
+    if output is None:
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
+    raw_ids = output.split()
+    ids: list[tuple[str, str]] = []
+    for raw_id in raw_ids:
+        window_id = _canonical_x_window_id(raw_id)
+        if window_id is None:
+            return WindowScan([], None, used_x11_fallback=True, failed=True)
+        ids.append((raw_id, window_id))
+
+    windows: list[ActiveWindow] = []
+    for raw_id, window_id in ids:
+        properties = run(["xprop", "-id", raw_id, "_NET_WM_PID", "WM_CLASS"], timeout=1.5)
+        if properties is None:
+            return WindowScan([], None, used_x11_fallback=True, failed=True)
+        pid = 0
+        cls = ""
+        for line in properties.splitlines():
+            if line.startswith("_NET_WM_PID") and "=" in line:
+                try:
+                    pid = int(line.split("=", 1)[1].strip())
+                except ValueError:
+                    return WindowScan([], None, used_x11_fallback=True, failed=True)
+                if pid < 0:
+                    return WindowScan([], None, used_x11_fallback=True, failed=True)
+            elif line.startswith("WM_CLASS"):
+                cls = _parse_wm_class(line)
+        proc = _process_comm_for_pid(pid)
+        if cls or proc:
+            windows.append({
+                "process": proc,
+                "class": cls,
+                "pid": pid,
+                "window_id": window_id,
+            })
+
+    if ids and not windows:
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
+
+    focused_id = None
+    active = run(["xdotool", "getactivewindow"], timeout=1.5)
+    if time.monotonic() >= deadline:
+        return WindowScan([], None, used_x11_fallback=True, failed=True)
+    if active is not None:
+        focused_id = _canonical_x_window_id(active.strip())
+    return WindowScan(
+        windows=windows,
+        focused_window_id=focused_id,
+        used_x11_fallback=True,
+    )
+
+
+def _scan_kde_game_windows() -> WindowScan | None:
+    output = _run_scan_command(
+        ["kdotool", "kwinscript", "--inline", _KDE_GAME_WINDOW_SCRIPT],
+        timeout=5.0,
+    )
+    if output is None:
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("windows"), list):
+        return None
+    focused_id = payload.get("focused_window_id")
+    if focused_id is not None and not isinstance(focused_id, str):
+        return None
+
+    windows: list[ActiveWindow] = []
+    for row in payload["windows"]:
+        if not isinstance(row, dict):
+            return None
+        window_id = row.get("window_id")
+        if not isinstance(window_id, str) or not window_id:
+            return None
+        pid_value = row.get("pid")
+        if isinstance(pid_value, bool):
+            return None
+        if pid_value is None:
+            pid = 0
+        elif isinstance(pid_value, int):
+            pid = pid_value
+        else:
+            return None
+        if pid < 0:
+            return None
+        cls_value = row.get("class")
+        if cls_value is not None and not isinstance(cls_value, str):
+            return None
+        windows.append({
+            "process": _process_comm_for_pid(pid),
+            "class": cls_value or "",
+            "pid": pid,
+            "window_id": window_id,
+        })
+    return WindowScan(windows=windows, focused_window_id=focused_id)
+
+
+def _x11_scan_tools_available() -> bool:
+    return bool(shutil.which("wmctrl") or (
+        shutil.which("xdotool") and shutil.which("xprop")
+    ))
+
+
+_KDE_INLINE_SUPPORTED: bool | None = None
+_KDE_INLINE_PROBE_LOCK = threading.Lock()
+
+
+def _kde_scan_supported() -> bool:
+    """Probe the host command set once, without executing a KWin script."""
+    global _KDE_INLINE_SUPPORTED
+    with _KDE_INLINE_PROBE_LOCK:
+        if _KDE_INLINE_SUPPORTED is None:
+            help_text = _run_scan_command(["kdotool", "--help"]) if host_which("kdotool") else None
+            _KDE_INLINE_SUPPORTED = bool(help_text and re.search(
+                r"(?m)^\s*kwinscript\b[^\n]*--inline\b", help_text,
+            ))
+        return _KDE_INLINE_SUPPORTED
+
+
+def _game_scan_adapter() -> Optional[Callable[[], Optional[ActiveWindow]]]:
+    # With neither kdotool nor DISPLAY, focus detection intentionally leaves
+    # its adapter uncached. Background support checks must still cache the
+    # missing host capability instead of probing on every polling cycle.
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    if (_ADAPTER is None and os.environ.get("WAYLAND_DISPLAY")
+            and ("kde" in desktop or "plasma" in desktop)
+            and not any(os.environ.get(key) for key in (
+                "HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "NIRI_SOCKET"))):
+        return _get_active_window_kde
+    return _current_adapter()
+
+
+def _uses_kde_game_scan(adapter: Optional[Callable[[], Optional[ActiveWindow]]]) -> bool:
+    # Focus detection may select X11 when KDE lacks kdotool. That fallback
+    # cannot enumerate native Wayland games and must not advertise support.
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    return adapter is _get_active_window_kde or (
+        adapter is _get_active_window_x11 and bool(os.environ.get("WAYLAND_DISPLAY"))
+        and ("kde" in desktop or "plasma" in desktop)
+    )
+
+
+def auto_start_scan_supported() -> bool:
+    """Whether this session has a background window enumeration adapter."""
+    adapter = _game_scan_adapter()
+    if _uses_kde_game_scan(adapter):
+        return _kde_scan_supported()
+    if adapter is _get_active_window_x11:
+        return _x11_scan_tools_available()
+    return False
+
+
+def scan_game_windows() -> WindowScan | None:
+    """Enumerate compositor windows without changing focus.
+
+    None means unsupported or failed; a successful scan with no windows has
+    an empty `windows` list. Captions are intentionally omitted.
+    """
+    adapter = _game_scan_adapter()
+    if _uses_kde_game_scan(adapter):
+        return _scan_kde_game_windows() if _kde_scan_supported() else None
+    if adapter is _get_active_window_x11:
+        return _scan_x11_game_windows()
+    return None
 
 
 # ─── pointer monitor ────────────────────────────────────────────────────────
