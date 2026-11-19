@@ -92,6 +92,25 @@ class AutoStartSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.daemon._scan_auto_start_targets(require_identities=True))
         self.assertEqual(self.daemon._auto_start_interval(True), 8.0)
 
+    async def test_failed_fallback_reports_detection_error_until_successful_scan(self):
+        d = self.daemon
+        await d._auto_start_tick()
+        self.assertIsNotNone(d._auto_start_pending)
+        for _ in range(2):
+            self.scan.return_value = WindowScan(
+                [self.win], None, used_x11_fallback=True, failed=True,
+            )
+            self.assertTrue(await d._auto_start_tick())
+            self.assertEqual(d._auto_start_error, 'detection')
+            self.assertIsNone(d._auto_start_pending)
+            self.assertFalse(d._session_active)
+
+        for used_fallback in (True, False):
+            await d._set_auto_start_error('detection')
+            self.scan.return_value = WindowScan([], None, used_x11_fallback=used_fallback)
+            self.assertEqual(await d._auto_start_tick(), used_fallback)
+            self.assertIsNone(d._auto_start_error)
+
     async def test_polling_loop_waits_after_successful_failed_and_timed_out_scans(self):
         for name, scan, interval in (
             ('successful fallback', WindowScan([], None, used_x11_fallback=True), 8.0),

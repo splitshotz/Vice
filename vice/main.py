@@ -1913,12 +1913,12 @@ class ViceDaemon:
 
     def _scan_auto_start_targets(
         self, *, require_identities: bool = False,
-    ) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool]]:
+    ) -> Optional[tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool, bool]]:
         scan = scan_game_windows()
         if scan is None:
             return None
         if scan.failed:
-            return ([], None, scan.used_x11_fallback) if not require_identities else None
+            return ([], None, scan.used_x11_fallback, True) if not require_identities else None
         targets = {}
         focused = None
         for win in scan.windows:
@@ -1934,18 +1934,20 @@ class ViceDaemon:
             targets.setdefault(identity, AutoStartTarget(game, win, identity))
             if win.get("window_id") == scan.focused_window_id:
                 focused = identity
-        return list(targets.values()), focused, scan.used_x11_fallback
+        return list(targets.values()), focused, scan.used_x11_fallback, False
 
     @staticmethod
     def _scan_targets_result(
         result: tuple,
-    ) -> tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool]:
-        """Accept older two-item test doubles while scans gain metadata."""
+    ) -> tuple[list[AutoStartTarget], Optional[ProcessIdentity], bool, bool]:
+        """Accept older test doubles while scans gain outcome metadata."""
         if len(result) == 2:
             targets, focused = result
-            return targets, focused, False
-        targets, focused, used_fallback = result
-        return targets, focused, used_fallback
+            return targets, focused, False, False
+        if len(result) == 3:
+            targets, focused, used_fallback = result
+            return targets, focused, used_fallback, False
+        return result
 
     @staticmethod
     def _auto_start_interval(used_fallback: bool) -> float:
@@ -2079,7 +2081,11 @@ class ViceDaemon:
                 self._auto_start_pending = None
                 await self._set_auto_start_error('detection')
                 return False
-            targets, focused, used_fallback = self._scan_targets_result(scan)
+            targets, focused, used_fallback, failed = self._scan_targets_result(scan)
+            if failed:
+                self._auto_start_pending = None
+                await self._set_auto_start_error('detection')
+                return used_fallback
             await self._set_auto_start_error(None)
             selected = targets[0] if len(targets) == 1 else next(
                 (target for target in targets if target.identity == focused), None)
