@@ -150,14 +150,14 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
 
   const discordFile = Boolean(state.config?.sharing?.share_discord_file);
   const share = useCallback(
-    (clip: Clip) => void runShare(clip, discordFile, notify, setManualCopy),
-    [discordFile, notify],
+    (clip: Clip) => void runShare(clip, discordFile, notify, setManualCopy, state.uploadServers),
+    [discordFile, notify, state.uploadServers],
   );
   const shareMenu = useCallback((clip: Clip) => setShareSlug(clip.slug), []);
 
   const copyLink = useCallback(
-    (clip: Clip) => void copyShareLink(clip, notify, setManualCopy),
-    [notify],
+    (clip: Clip) => void copyShareLink(clip, notify, setManualCopy, state.uploadServers),
+    [notify, state.uploadServers],
   );
 
   const copyDiscordFile = useCallback(

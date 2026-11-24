@@ -30,6 +30,53 @@ export interface Clip {
   /** Already carries a content revision, so it can be used as a cache key. */
   video_url: string;
   thumb_url: string;
+  /** Set when the clip is on a media server. local false: only there. */
+  cloud?: ClipCloud | null;
+}
+
+export interface ClipCloud {
+  server_id: string;
+  server_name: string;
+  url: string;
+  uploaded_at: string;
+  /** False when the local file was removed and the clip plays from the server. */
+  local: boolean;
+}
+
+export type UploadKind = 'zipline' | 's3';
+
+/** A media server connection. Secrets are never sent back, only has_secret. */
+export interface UploadServer {
+  id: string;
+  kind: UploadKind;
+  name: string;
+  has_secret?: boolean;
+  // Zipline
+  url?: string;
+  folder?: string;
+  // S3-compatible
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  prefix?: string;
+  public_base_url?: string;
+  presign_days?: number;
+  path_style?: boolean;
+}
+
+export interface UploadServers {
+  servers: UploadServer[];
+  active_server: string;
+  delete_after_upload: boolean;
+  concurrency: number;
+}
+
+export interface UploadItem {
+  slug: string;
+  state: 'queued' | 'uploading' | 'downloading';
+  sent: number;
+  total: number;
+  server_id: string;
 }
 
 /**
@@ -178,6 +225,12 @@ export interface Config {
     cooldown?: number;
     min_confidence?: number;
   };
+  upload?: Record<string, unknown> & {
+    servers?: UploadServer[];
+    active_server?: string;
+    delete_after_upload?: boolean;
+    concurrency?: number;
+  };
 }
 
 /** Every message the daemon broadcasts. */
@@ -207,7 +260,12 @@ export type WsMessage =
   | ({type: 'key_overlay'} & KeyOverlayState)
   | ({type: 'gsr_install'} & GsrInstall)
   | {type: 'matugen'; colors: Record<string, string> | null}
-  | {type: 'config_changed'};
+  | {type: 'config_changed'}
+  | ({type: 'upload_servers'} & UploadServers)
+  | {type: 'upload_queue'; items: UploadItem[]}
+  | {type: 'upload_progress'; slug: string; sent: number; total: number}
+  | {type: 'upload_done'; slug: string; server_name?: string}
+  | {type: 'upload_error'; slug: string; message: string; canceled: boolean};
 
 export type ViewName = 'home' | 'clips' | 'images' | 'editor' | 'settings' | 'about';
 

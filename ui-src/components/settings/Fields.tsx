@@ -215,12 +215,13 @@ export function TextField({
   label: string;
   mono?: boolean;
   wide?: boolean;
-  type?: 'text' | 'number';
+  type?: 'text' | 'number' | 'password';
   min?: number;
   max?: number;
 }) {
   return (
     <input
+      autoComplete={type === 'password' ? 'off' : undefined}
       className="text-input"
       data-mono={mono || undefined}
       data-wide={wide || undefined}

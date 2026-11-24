@@ -24,6 +24,8 @@ import type {
   Playlist,
   Status,
   UpdateInfo,
+  UploadItem,
+  UploadServers,
   ViewName,
   WsMessage,
 } from '../lib/types';
@@ -77,6 +79,10 @@ interface State {
   /** Bumped whenever the editor should reload its project from the daemon. */
   editorProjectRevision: number;
   gsrInstall: GsrInstall | null;
+  /** Media servers set up in Settings, or null before they have loaded. */
+  uploadServers: UploadServers | null;
+  /** Clips queued for, or on their way to or from, a media server. */
+  uploads: Record<string, UploadItem>;
 }
 
 const INITIAL_STATUS: Status = {
@@ -119,6 +125,8 @@ const initialState: State = {
   dismissed: [],
   editorProjectRevision: 0,
   gsrInstall: null,
+  uploadServers: null,
+  uploads: {},
 };
 
 type Action =
@@ -145,7 +153,9 @@ type Action =
   | {type: 'clearEvent'; id: number}
   | {type: 'dismiss'; banner: BannerId}
   | {type: 'clearUpdate'}
-  | {type: 'gsrInstall'; value: GsrInstall | null};
+  | {type: 'gsrInstall'; value: GsrInstall | null}
+  | {type: 'setUploadServers'; value: UploadServers}
+  | {type: 'setUploads'; items: UploadItem[]};
 
 let eventSeq = 0;
 
@@ -236,6 +246,12 @@ function reduce(state: State, action: Action): State {
 
     case 'gsrInstall':
       return {...state, gsrInstall: action.value};
+
+    case 'setUploadServers':
+      return {...state, uploadServers: action.value};
+
+    case 'setUploads':
+      return {...state, uploads: Object.fromEntries(action.items.map(item => [item.slug, item]))};
 
     case 'ws':
       return reduceWs(state, action.msg);
@@ -447,6 +463,43 @@ function reduceWs(state: State, msg: WsMessage): State {
         holdMs: 12000,
       });
 
+    case 'upload_servers': {
+      const {type: _ignored, ...servers} = msg;
+      return {...state, uploadServers: servers};
+    }
+
+    case 'upload_queue':
+      return {...state, uploads: Object.fromEntries(msg.items.map(item => [item.slug, item]))};
+
+    // Bytes sent: the card subscribes on its own, like export progress.
+    case 'upload_progress':
+      return state;
+
+    case 'upload_done': {
+      const clip = state.clips.find(c => c.slug === msg.slug);
+      return withEvent(state, {
+        kind: 'saved',
+        title: t('events.uploaded', {server: msg.server_name ?? ''}),
+        detail: clip ? clipTitle(clip) : undefined,
+        tone: 'accent',
+        holdMs: 3500,
+      });
+    }
+
+    case 'upload_error': {
+      const clip = state.clips.find(c => c.slug === msg.slug);
+      const name = clip ? clipTitle(clip) : msg.slug;
+      return msg.canceled
+        ? withEvent(state, {kind: 'info', title: t('events.uploadCanceled'), detail: name, tone: 'neutral', holdMs: 3000})
+        : withEvent(state, {
+            kind: 'error',
+            title: t('events.uploadFailed', {name}),
+            detail: msg.message,
+            tone: 'error',
+            holdMs: 9000,
+          });
+    }
+
     // Export progress belongs to the editor, which subscribes separately.
     case 'export_progress':
     case 'export_done':
@@ -499,6 +552,19 @@ export function StoreProvider({children}: {children: ReactNode}) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Media servers and anything already uploading. Not part of the first
+  // load: a slow or unset server list must never hold up the window.
+  useEffect(() => {
+    void api
+      .uploadServers()
+      .then(value => dispatch({type: 'setUploadServers', value}))
+      .catch(err => console.debug('Reading media servers failed', err));
+    void api
+      .uploads()
+      .then(items => dispatch({type: 'setUploads', items}))
+      .catch(err => console.debug('Reading the upload queue failed', err));
   }, []);
 
   useEffect(() => {

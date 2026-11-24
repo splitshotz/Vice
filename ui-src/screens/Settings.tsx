@@ -47,6 +47,7 @@ import {
   Toggle,
   type RowNote,
 } from '../components/settings/Fields';
+import {MediaServers} from '../components/settings/MediaServers';
 
 const SECTIONS = [
   ['recording', 'settings.secRecording'],
@@ -54,6 +55,7 @@ const SECTIONS = [
   ['hotkeys', 'settings.secHotkeys'],
   ['storage', 'settings.secStorage'],
   ['sharing', 'settings.secSharing'],
+  ['media', 'settings.secMedia'],
   ['discord', 'settings.secDiscord'],
   ['overlay', 'settings.secOverlay'],
   ['appearance', 'settings.secAppearance'],
@@ -1054,6 +1056,11 @@ export function Settings() {
               ]}
             />
           </Row>
+        </Card>
+
+        {/* ── Media server ──────────────────────────────────────── */}
+        <Card id="media" title={t('settings.secMedia')} register={register('media')}>
+          <MediaServers />
         </Card>
 
         {/* ── Discord ───────────────────────────────────────────── */}

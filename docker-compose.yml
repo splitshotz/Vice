@@ -1,0 +1,101 @@
+# Local media servers for trying Vice's clip uploads (Settings, Media server).
+# Not part of Vice itself, and not for production: the passwords below are
+# throwaway defaults. Override them with a .env file next to this one.
+#
+#   docker compose up -d   (or: podman compose up -d)
+#
+# Zipline  http://localhost:3000   Make an account on first visit, then copy
+#                                  the API token from your user settings into
+#                                  Vice. Server address: http://localhost:3000
+#
+# S3       http://localhost:8333   SeaweedFS. In Vice, add S3 storage with:
+#                                    Endpoint  http://localhost:8333
+#                                    Bucket    vice
+#                                    Region    us-east-1
+#                                    Keys      vice / vice-dev-password
+#                                              (S3_ACCESS_KEY / S3_SECRET_KEY)
+#                                    Path-style addresses: on
+
+services:
+  zipline-db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zipline
+      POSTGRES_PASSWORD: ${ZIPLINE_DB_PASSWORD:-zipline-dev-password}
+      POSTGRES_DB: zipline
+    volumes:
+      - zipline-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zipline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  zipline:
+    image: ghcr.io/diced/zipline:latest
+    restart: unless-stopped
+    depends_on:
+      zipline-db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # Zipline v4 refuses to start with a secret shorter than 32 characters.
+      CORE_SECRET: ${ZIPLINE_SECRET:-change-me-to-a-long-random-string-0123456789}
+      CORE_PORT: 3000
+      DATABASE_URL: postgres://zipline:${ZIPLINE_DB_PASSWORD:-zipline-dev-password}@zipline-db:5432/zipline
+      # Clips are big. Raise Zipline's upload cap from its default.
+      FILES_MAX_FILE_SIZE: 4gb
+    volumes:
+      - zipline-uploads:/zipline/uploads
+      - zipline-public:/zipline/public
+
+  # S3-compatible storage. MinIO no longer publishes images, so SeaweedFS
+  # stands in: same S3 API, and it checks the signature on every request.
+  # Its keys file is written from the environment at start, so the keys can
+  # be overridden from .env like everything else here.
+  s3:
+    image: docker.io/chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        printf '{"identities":[{"name":"vice","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json
+        exec weed server -dir=/data -filer -s3 -s3.port=8333 -s3.config=/tmp/s3.json
+    ports:
+      - "8333:8333"
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-vice}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-vice-dev-password}
+    volumes:
+      - s3-data:/data
+
+  # Creates the "vice" bucket once the S3 server answers, then exits. It gives
+  # up after about two minutes instead of holding `compose up` open forever.
+  s3-setup:
+    image: docker.io/chrislusf/seaweedfs:latest
+    depends_on:
+      - s3
+    restart: "no"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        for i in $$(seq 1 60); do
+          echo "s3.bucket.create -name vice" | weed shell -master=s3:9333 -filer=s3:8888 >/dev/null 2>&1
+          if echo "s3.bucket.list" | weed shell -master=s3:9333 -filer=s3:8888 2>/dev/null | grep -q vice; then
+            echo "bucket vice is ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "gave up waiting for the S3 server"
+        exit 1
+
+volumes:
+  zipline-db:
+  zipline-uploads:
+  zipline-public:
+  s3-data:

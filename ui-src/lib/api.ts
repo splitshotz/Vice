@@ -1,4 +1,6 @@
-import type {Clip, Config, Highlight, Image, Playlist, Status} from './types';
+import type {
+  Clip, Config, Highlight, Image, Playlist, Status, UploadItem, UploadServer, UploadServers,
+} from './types';
 
 /**
  * The daemon's local HTTP API. Every call is same-origin: the public server
@@ -61,7 +63,49 @@ export const api = {
   // The list endpoints wrap their payload in an envelope. Unwrapped here so
   // callers only ever see the list.
   clips: async () => (await request<{clips: Clip[]}>('/api/clips')).clips,
-  deleteClip: (slug: string) => request<void>(`/api/clips/${enc(slug)}`, {method: 'DELETE'}),
+  /**
+   * `keepCloud` removes only the local file of a clip that is on a media
+   * server; `remote` also removes the server's copy.
+   */
+  deleteClip: (slug: string, opts: {keepCloud?: boolean; remote?: boolean} = {}) => {
+    const query = opts.keepCloud ? '?keep_cloud=1' : opts.remote ? '?remote=1' : '';
+    return request<void>(`/api/clips/${enc(slug)}${query}`, {method: 'DELETE'});
+  },
+
+  // Media servers. Secrets go up with a save and never come back down.
+  uploadServers: () => request<UploadServers>('/api/upload/servers'),
+  saveUploadServer: (server: Partial<UploadServer>, secret?: Record<string, string>, activate = false) =>
+    post<UploadServers & {ok: boolean; id: string; error?: string}>('/api/upload/servers', {
+      server,
+      secret,
+      activate,
+    }),
+  deleteUploadServer: (id: string) =>
+    request<UploadServers>(`/api/upload/servers/${enc(id)}`, {method: 'DELETE'}),
+  /** Tries the form as typed. Answers ok:false with a reason rather than throwing. */
+  testUploadServer: (server: Partial<UploadServer>, secret?: Record<string, string>) =>
+    post<{ok: boolean; detail?: string; error?: string}>('/api/upload/test', {server, secret}),
+  uploads: async () => (await request<{items: UploadItem[]}>('/api/uploads')).items,
+  uploadClips: (slugs: string[], serverId?: string) =>
+    post<{ok: boolean; queued: string[]; skipped: string[]}>('/api/uploads', {
+      slugs,
+      server_id: serverId,
+    }),
+  cancelUpload: (slug: string) => post<{ok: boolean}>(`/api/uploads/${enc(slug)}/cancel`),
+  /**
+   * The link to copy for a clip. For an uploaded clip the daemon checks the
+   * server first and falls back to this PC's own link when it is down.
+   */
+  resolveShare: (slug: string) =>
+    request<{
+      share_url: string;
+      via: 'local' | 'server' | 'fallback' | 'server_down';
+      server_name?: string;
+      share_is_public: boolean;
+    }>(`/api/clips/${enc(slug)}/share`),
+  downloadCloudClip: (slug: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/download`),
+  removeFromServer: (slug: string, force = false) =>
+    request<{ok: boolean}>(`/api/clips/${enc(slug)}/cloud${force ? '?force=1' : ''}`, {method: 'DELETE'}),
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
   setClipGame: (slug: string, game: string) => post<{ok: boolean}>(`/api/clips/${enc(slug)}/game`, {game}),
   matugen: () => request<{colors: Record<string, string> | null}>('/api/theme/matugen'),

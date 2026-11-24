@@ -340,12 +340,18 @@
   font-size: 13.5px;
   font-weight: 500;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Wraps rather than running past the edge of the window: the island is
+   measured from its content, so a second line just makes it taller. */
 .island-detail {
   font-size: 11.5px;
   color: var(--color-text-disabled);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
   font-variant-numeric: tabular-nums;
 }
 

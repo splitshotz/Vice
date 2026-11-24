@@ -1,6 +1,6 @@
 import {api} from './api';
 import {copyToClipboard} from './clipboard';
-import type {Clip} from './types';
+import type {Clip, UploadServers} from './types';
 import type {IslandEvent} from '../state/store';
 import {t} from './i18n';
 
@@ -16,6 +16,7 @@ export async function copyShareLink(
   clip: Clip,
   notify: (event: Omit<IslandEvent, 'id'>) => void,
   onManualCopy: (url: string) => void,
+  servers?: UploadServers | null,
 ): Promise<void> {
   if (!clip.share_url) {
     notify({
@@ -26,6 +27,10 @@ export async function copyShareLink(
     });
     return;
   }
+  if (clip.cloud) {
+    await copyCloudLink(clip, notify, onManualCopy);
+    return;
+  }
   if (!(await copyToClipboard(clip.share_url))) {
     onManualCopy(clip.share_url);
     return;
@@ -34,7 +39,11 @@ export async function copyShareLink(
     notify({
       kind: 'info',
       title: t('card.linkCopiedLocal'),
-      detail: t('card.linkCopiedLocalDetail'),
+      // Two ways to a link that works anywhere: put the clip on a media
+      // server, or bring the tunnel up. Name the server when there is one.
+      detail: activeServerName(servers)
+        ? t('card.linkCopiedLocalUpload', {server: activeServerName(servers)})
+        : t('card.linkCopiedLocalDetail'),
       tone: 'neutral',
       holdMs: 8000,
     });
@@ -53,9 +62,11 @@ export async function shareClip(
   discordFile: boolean,
   notify: (event: Omit<IslandEvent, 'id'>) => void,
   onManualCopy: (url: string) => void,
+  servers?: UploadServers | null,
 ): Promise<void> {
-  if (!discordFile) {
-    await copyShareLink(clip, notify, onManualCopy);
+  // A cloud clip has no file here to make a Discord copy from.
+  if (!discordFile || (clip.cloud && !clip.cloud.local)) {
+    await copyShareLink(clip, notify, onManualCopy, servers);
     return;
   }
   notify({kind: 'info', title: t('card.discordPreparing'), tone: 'neutral', holdMs: 2500});
@@ -82,4 +93,55 @@ export async function shareClip(
 /** The Share button's tooltip, which also has to say that right-click exists. */
 export function shareButtonLabel(discordFile: boolean): string {
   return t('card.shareTitle', {action: discordFile ? t('card.copyForDiscord') : t('card.copyShareLink')});
+}
+
+/** The media server uploads go to, by name, or '' when none is set up. */
+function activeServerName(servers?: UploadServers | null): string {
+  if (!servers?.servers.length) return '';
+  return (servers.servers.find(s => s.id === servers.active_server) ?? servers.servers[0]).name;
+}
+
+/**
+ * Copy an uploaded clip's link, checked first. The daemon asks the server for
+ * a byte of the file (two seconds at most) and, when the server does not
+ * answer but the file is still on this PC, hands back the link this PC serves
+ * instead. A dead link copied without a word is the failure this prevents.
+ */
+async function copyCloudLink(
+  clip: Clip,
+  notify: (event: Omit<IslandEvent, 'id'>) => void,
+  onManualCopy: (url: string) => void,
+): Promise<void> {
+  const server = clip.cloud?.server_name ?? '';
+  let resolved: Awaited<ReturnType<typeof api.resolveShare>> | null = null;
+  try {
+    resolved = await api.resolveShare(clip.slug);
+  } catch (err) {
+    console.debug('Checking the media server failed, copying its link as is', err);
+  }
+  const url = resolved?.share_url || clip.share_url;
+  if (!(await copyToClipboard(url))) {
+    onManualCopy(url);
+    return;
+  }
+  const name = resolved?.server_name || server;
+  if (resolved?.via === 'fallback') {
+    notify({
+      kind: 'info',
+      title: t('cloud.unreachable', {server: name}),
+      detail: resolved.share_is_public ? t('cloud.fallbackTunnel') : t('cloud.fallbackLocal'),
+      tone: 'neutral',
+      holdMs: 8000,
+    });
+  } else if (resolved?.via === 'server_down') {
+    notify({
+      kind: 'error',
+      title: t('cloud.unreachable', {server: name}),
+      detail: t('cloud.serverDownCopied'),
+      tone: 'error',
+      holdMs: 8000,
+    });
+  } else {
+    notify({kind: 'info', title: t('cloud.linkCopied', {server: name}), tone: 'accent', holdMs: 3000});
+  }
 }

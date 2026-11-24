@@ -16,7 +16,7 @@ export interface ReleaseNotes {
 
 export const WHATS_NEW: Record<string, ReleaseNotes> = {
   '2.19.0': {
-    items: ['soundTest', 'voiceLength', 'discordSize', 'newLink'],
+    items: ['soundTest', 'voiceLength', 'discordSize', 'newLink', 'mediaServer'],
   },
   '2.18.0': {
     items: ['soundPacks', 'matugen', 'gameTags', 'previews', 'overlayKeys', 'voiceClipping', 'closeWindow'],

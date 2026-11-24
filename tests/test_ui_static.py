@@ -364,6 +364,7 @@ class SettingsCoverageTests(unittest.TestCase):
             "hotkeys",
             "storage",
             "sharing",
+            "media",
             "discord",
             "appearance",
             "advanced",

@@ -8,6 +8,9 @@ import {H264_SUPPORTED} from '../lib/env';
 import {clipNeedsProxy, playbackUrl} from '../lib/playback';
 import {t} from '../lib/i18n';
 import {InlineRename} from './InlineRename';
+import {IconCheck, IconCloud} from './Icons';
+import {onWsMessage} from '../lib/ws';
+import {useStore} from '../state/store';
 
 /**
  * A video holds its decoded buffer for as long as a source is attached, so an
@@ -37,17 +40,30 @@ export interface ClipActions {
   onRenameDone?: () => void;
 }
 
+/** Multi-select for a grid. Leave it out where cards are only ever opened. */
+export interface CardSelection {
+  selected: boolean;
+  /** Something is already picked, so a plain click picks too. */
+  selecting: boolean;
+  onPick: (clip: Clip, opts: {range: boolean}) => void;
+}
+
 export function ClipCard({
   clip,
   isNew,
   actions = {},
   draggable,
+  selection,
 }: {
   clip: Clip;
   isNew?: boolean;
   actions?: ClipActions;
   draggable?: boolean;
+  selection?: CardSelection;
 }) {
+  const cloudOnly = Boolean(clip.cloud && !clip.cloud.local);
+  const wantsPick = (e: React.MouseEvent) =>
+    Boolean(selection && (selection.selecting || e.ctrlKey || e.metaKey || e.shiftKey));
   const videoRef = useRef<HTMLVideoElement>(null);
   const releaseTimer = useRef<number | undefined>(undefined);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -111,6 +127,8 @@ export function ClipCard({
     <article
       className="clip-card"
       data-broken={broken || undefined}
+      data-selected={selection?.selected || undefined}
+      data-selecting={selection?.selecting || undefined}
       draggable={draggable && !renaming}
       onDragStart={e => startClipDrag(e, clip)}
       onDragEnd={endClipDrag}
@@ -126,13 +144,40 @@ export function ClipCard({
         // would never get its second click if the first one opened the viewer.
         if (renaming) return;
         const target = e.target as HTMLElement;
-        if (target.closest('button, a, input, textarea, .clip-name')) return;
+        if (target.closest('button, a, input, textarea')) return;
+        if (wantsPick(e)) {
+          e.preventDefault();
+          selection?.onPick(clip, {range: e.shiftKey});
+          return;
+        }
+        if (target.closest('.clip-name')) return;
         actions.onOpen?.(clip);
       }}>
+      {selection ? (
+        <button
+          type="button"
+          className="clip-select"
+          role="checkbox"
+          aria-checked={selection.selected}
+          aria-label={t('cloud.selectClip', {name: clipTitle(clip)})}
+          onClick={e => {
+            e.stopPropagation();
+            selection.onPick(clip, {range: e.shiftKey});
+          }}>
+          {selection.selected ? <IconCheck size={12} /> : null}
+        </button>
+      ) : null}
       <button
         type="button"
         className="clip-thumb"
-        onClick={() => actions.onOpen?.(clip)}
+        onClick={e => {
+          if (wantsPick(e)) {
+            e.stopPropagation();
+            selection?.onPick(clip, {range: e.shiftKey});
+            return;
+          }
+          actions.onOpen?.(clip);
+        }}
         onPointerEnter={attachPreview}
         onPointerLeave={releasePreview}
         aria-label={t('card.openTitle', {name: clipTitle(clip)})}>
@@ -160,6 +205,18 @@ export function ClipCard({
             </span>
           ) : null}
           {isNew ? <span className="clip-badge clip-badge-new">{t('common.new')}</span> : null}
+          {clip.cloud ? (
+            <span
+              className="clip-badge clip-badge-cloud"
+              data-only={cloudOnly || undefined}
+              title={
+                cloudOnly
+                  ? t('cloud.badgeOnly', {server: clip.cloud.server_name})
+                  : t('cloud.badgeBoth', {server: clip.cloud.server_name})
+              }>
+              <IconCloud size={13} filled={cloudOnly} />
+            </span>
+          ) : null}
         </span>
 
         {clip.duration && !broken ? (
@@ -168,6 +225,7 @@ export function ClipCard({
       </button>
 
       <PreviewStatus clip={clip} />
+      <UploadStatus clip={clip} />
 
       <div className="clip-body">
         {renaming ? (
@@ -185,7 +243,7 @@ export function ClipCard({
           <h3
             className="clip-name"
             title={t('card.renameHint', {name: clipTitle(clip)})}
-            onDoubleClick={() => actions.onRename && setRenamingHere(true)}>
+            onDoubleClick={() => actions.onRename && !cloudOnly && !selection?.selecting && setRenamingHere(true)}>
             {clipTitle(clip)}
           </h3>
         )}
@@ -207,12 +265,12 @@ export function ClipCard({
 
         {hasActions(actions) ? (
           <div className="clip-actions">
-            {actions.onTrim ? (
+            {actions.onTrim && !cloudOnly ? (
               <IconButton label={t('card.trim')} onClick={() => actions.onTrim?.(clip)}>
                 <ScissorsGlyph />
               </IconButton>
             ) : null}
-            {actions.onCopyFile ? (
+            {actions.onCopyFile && !cloudOnly ? (
               <IconButton label={t('card.copyVideo')} onClick={() => actions.onCopyFile?.(clip)}>
                 <ClipboardGlyph />
               </IconButton>
@@ -225,7 +283,7 @@ export function ClipCard({
                 <LinkGlyph />
               </IconButton>
             ) : null}
-            {actions.onReveal ? (
+            {actions.onReveal && !cloudOnly ? (
               <IconButton label={t('card.reveal')} onClick={() => actions.onReveal?.(clip)}>
                 <FolderGlyph />
               </IconButton>
@@ -269,6 +327,48 @@ function PreviewStatus({clip}: {clip: Clip}) {
       }}>
       <span className="clip-preview-ring" aria-hidden="true" />
     </button>
+  );
+}
+
+/**
+ * A ring that fills as the clip goes up to (or comes down from) its server.
+ * Bytes arrive several times a second, so they are read off the socket here
+ * rather than through the store, which would re-render every card.
+ */
+function UploadStatus({clip}: {clip: Clip}) {
+  const {state} = useStore();
+  const job = state.uploads[clip.slug];
+  const [sent, setSent] = useState<{sent: number; total: number} | null>(null);
+
+  useEffect(() => {
+    if (!job) {
+      setSent(null);
+      return;
+    }
+    return onWsMessage(msg => {
+      if (msg.type === 'upload_progress' && msg.slug === clip.slug) setSent({sent: msg.sent, total: msg.total});
+    });
+  }, [clip.slug, job]);
+
+  if (!job) return null;
+  const total = sent?.total || job.total || 0;
+  const fraction = total ? Math.min(1, (sent?.sent ?? job.sent ?? 0) / total) : 0;
+  const label =
+    job.state === 'queued'
+      ? t('cloud.waiting')
+      : job.state === 'downloading'
+        ? t('cloud.downloading', {percent: Math.round(fraction * 100)})
+        : t('cloud.uploading', {percent: Math.round(fraction * 100)});
+  return (
+    <span
+      className="clip-upload-status"
+      role="status"
+      data-state={job.state}
+      title={label}
+      aria-label={label}
+      style={{'--upload-progress': `${fraction * 360}deg`} as React.CSSProperties}>
+      <span className="clip-upload-ring" aria-hidden="true" />
+    </span>
   );
 }
 

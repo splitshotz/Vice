@@ -39,3 +39,6 @@ node_modules/
 
 # Build output from tools/verify-custom-accent.mjs.
 tools/accent-parity/out/
+
+# Local media server logins for docker-compose.yml
+.env
