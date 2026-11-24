@@ -9,6 +9,8 @@ import {t} from './i18n';
  * to go through the daemon's H.264 preview proxy.
  */
 export function clipNeedsProxy(clip: Clip | null | undefined): boolean {
+  // A cloud clip plays straight from its server; there is no file here to proxy.
+  if (clip?.cloud && !clip.cloud.local) return false;
   const codec = (clip?.vcodec ?? '').toLowerCase();
   return (codec === 'hevc' || codec === 'h265') && !HEVC_SUPPORTED;
 }

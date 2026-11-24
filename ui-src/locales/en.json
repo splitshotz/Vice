@@ -158,7 +158,8 @@
     },
     "noShareLinkYet": "No share link for this clip yet",
     "linkCopiedLocal": "Link copied, but it is local only",
-    "linkCopiedLocalDetail": "Install cloudflared for links that work off your network",
+    "linkCopiedLocalDetail": "Set up a media server in Settings, or install cloudflared, for links that work off your network",
+    "linkCopiedLocalUpload": "Upload it to {server}, or install cloudflared, for a link that works off your network",
     "shareLinkCopied": "Share link copied",
     "alreadyIn": "Already in {playlist}",
     "errAddClip": "Could not add the clip",
@@ -546,7 +547,10 @@
     "errScreenshot": "Could not take the screenshot",
     "screenshotNotCopied": "Screenshot saved, but not copied",
     "updating": "Vice is updating to {version}",
-    "updatingDetail": "The recorder restarts to pick up the new version. This window reconnects on its own."
+    "updatingDetail": "The recorder restarts to pick up the new version. This window reconnects on its own.",
+    "uploaded": "Uploaded to {server}",
+    "uploadCanceled": "Upload canceled",
+    "uploadFailed": "Could not upload {name}"
   },
   "about": {
     "title": "About",
@@ -993,7 +997,8 @@
     "discordSizeNitro": "500 MB (Nitro)",
     "keyOverlayKeys": "Keys on the panel",
     "keyOverlayKeysHelp": "Click a key to take it off the panel.",
-    "keySpace": "Space"
+    "keySpace": "Space",
+    "secMedia": "Media server"
   },
   "whatsNew": {
     "title": "What's new in Vice {version}",
@@ -1015,6 +1020,10 @@
       "newLink": {
         "title": "Take a link back",
         "body": "New link in the share sheet stops the old one working."
+      },
+      "mediaServer": {
+        "title": "Upload clips to your own server",
+        "body": "Add a Zipline or S3-compatible server under Settings, Media server, then right-click a clip, or Ctrl+click several, to upload. Share links then point at the server, and Vice can delete the local copy once a clip is safely up."
       }
     },
     "v2_18_0": {
@@ -1128,5 +1137,118 @@
     "label": "Sounds",
     "classic": "Classic",
     "futuristic": "Futuristic"
+  },
+  "cloud": {
+    "uploadTo": "Upload to {server}",
+    "noServer": "Set up a media server in Settings",
+    "cancelUpload": "Cancel upload",
+    "deleteLocal": "Delete local copy, keep it on the server",
+    "download": "Download from {server}",
+    "removeFrom": "Remove from {server}",
+    "alreadyUp": "Those clips are already on the server",
+    "queued": {
+      "one": "{count} clip queued for {server}",
+      "other": "{count} clips queued for {server}"
+    },
+    "errUpload": "Could not start the upload",
+    "errCancel": "Could not cancel the upload",
+    "localRemoved": {
+      "one": "Local copy removed, the clip stays on the server",
+      "other": "{count} local copies removed, the clips stay on the server"
+    },
+    "errDeleteLocal": "Could not remove the local copy",
+    "downloaded": "Downloaded from the server",
+    "errDownload": "Could not download the clip",
+    "removed": {
+      "one": "Removed from the server",
+      "other": "{count} clips removed from the server"
+    },
+    "errRemove": "Could not remove it from the server",
+    "alsoDeleteRemote": "Also delete it from {server}",
+    "badgeOnly": "Only on {server}. Plays from there.",
+    "badgeBoth": "Also on {server}",
+    "waiting": "Waiting to upload",
+    "uploading": "Uploading, {percent}%",
+    "downloading": "Downloading, {percent}%",
+    "selectClip": "Select {name}",
+    "selectionLabel": "Selected clips",
+    "selected": {
+      "one": "{count} selected",
+      "other": "{count} selected"
+    },
+    "uploadCount": {
+      "one": "Upload {count} to {server}",
+      "other": "Upload {count} to {server}"
+    },
+    "deleteLocalCount": {
+      "one": "Delete {count} local copy",
+      "other": "Delete {count} local copies"
+    },
+    "removeCount": {
+      "one": "Remove {count} from server",
+      "other": "Remove {count} from server"
+    },
+    "selectAll": "Select all",
+    "clearSelection": "Clear",
+    "viewerButton": "Cloud",
+    "linkCopied": "{server} link copied",
+    "shareFrom": "Link from {server}",
+    "shareNoFile": "This clip is only on the server, so there is no file here to drag. Share the link instead.",
+    "unreachable": "{server} isn't reachable",
+    "fallbackTunnel": "Copied the Cloudflare link instead",
+    "fallbackLocal": "Copied a link that only works on your network instead",
+    "serverDownCopied": "Copied its link anyway, but it won't open until the server is back"
+  },
+  "media": {
+    "servers": "Servers",
+    "serversHelp": "Clips you upload go to the selected server, and their share link becomes the server's link, so it works with this PC off and without a tunnel.",
+    "none": "No media server yet.",
+    "useServer": "Upload to {name}",
+    "noSecret": "No token or keys saved",
+    "edit": "Edit",
+    "remove": "Remove",
+    "addZipline": "Add Zipline",
+    "addS3": "Add S3 storage",
+    "kind": "Kind",
+    "s3Name": "S3-compatible (AWS, R2, MinIO, B2)",
+    "name": "Name",
+    "url": "Server address",
+    "urlHelp": "The address you open Zipline at.",
+    "token": "API token",
+    "tokenHelp": "From your Zipline user settings. Kept in upload_secrets.json, readable only by you.",
+    "folder": "Folder id",
+    "folderHelp": "Optional. Puts uploads in this Zipline folder.",
+    "endpoint": "Endpoint",
+    "endpointHelp": "The S3 API address. Leave out the bucket.",
+    "bucket": "Bucket",
+    "region": "Region",
+    "regionHelp": "auto for R2, us-east-1 for most others.",
+    "accessKey": "Access key id",
+    "secretKey": "Secret access key",
+    "prefix": "Folder in the bucket",
+    "prefixHelp": "Prepended to every file name, such as vice/.",
+    "publicBase": "Public address",
+    "publicBaseHelp": "Optional. A public bucket or CDN address, such as an R2 custom domain. Without one, links are signed and expire.",
+    "presignDays": "Links last",
+    "presignDaysHelp": "Signed links stop working after this. Vice signs a fresh one when you copy it again.",
+    "days": {
+      "one": "{count} day",
+      "other": "{count} days"
+    },
+    "pathStyle": "Path-style addresses",
+    "pathStyleHelp": "Turn on for MinIO and other self-hosted storage.",
+    "secretKept": "Saved, leave empty to keep",
+    "test": "Test connection",
+    "testing": "Testing",
+    "testOk": "Connected: {detail}",
+    "testFailed": "Could not connect",
+    "save": "Save server",
+    "saved": "{name} saved",
+    "errRemove": "Could not remove the server",
+    "errSave": "Could not save the media server setting",
+    "deleteAfter": "Delete local copy after upload",
+    "deleteAfterHelp": "Frees disk space. The clip stays in your library with a cloud badge and plays from the server. You can download it back any time.",
+    "concurrency": "Uploads at once",
+    "concurrencyHelp": "How many clips go up at the same time."
   }
 }

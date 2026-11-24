@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from vice import editor, keys, playlists, updates
+from vice import editor, keys, playlists, updates, uploads
 
 try:
     from vice import share
@@ -28,6 +28,10 @@ REDIRECTS = {
     (editor, "PROJECT_PATH"): ROOT / "editor_project.json",
     (keys, "KEYS_DIR"): ROOT / "keys",
     (updates, "CACHE_PATH"): ROOT / "update.json",
+    (uploads, "UPLOADS_PATH"): ROOT / "uploads.json",
+    (uploads, "CLOUD_THUMB_DIR"): ROOT / "cloud_thumbs",
+    (uploads, "UPLOAD_SECRETS_PATH"): ROOT / "upload_secrets.json",
+    (uploads, "_DATA"): ROOT,
 }
 SHARE_REDIRECTS = {
     "THUMB_DIR": ROOT / "thumbs",

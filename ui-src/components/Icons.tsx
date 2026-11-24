@@ -172,3 +172,16 @@ export const IconExpand = ({collapse, size = 15}: IconProps & {collapse?: boolea
     />
   </svg>
 );
+
+/** On a media server. `filled` for a clip that lives only there. */
+export const IconCloud = ({size = 14, className, filled}: IconProps & {filled?: boolean}) => (
+  <svg {...base(size)} fill={filled ? 'currentColor' : 'none'} className={className} aria-hidden="true">
+    <path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9z" />
+  </svg>
+);
+
+export const IconUpload = ({size = 14, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+  </svg>
+);

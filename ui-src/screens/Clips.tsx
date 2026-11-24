@@ -11,6 +11,8 @@ import {ContextMenu} from '../components/ContextMenu';
 import {PlaylistModal, type PlaylistDraft} from '../components/PlaylistModal';
 import {Modal} from '../components/Modal';
 import {IconMore, IconWarning} from '../components/Icons';
+import {SelectionBar} from '../components/SelectionBar';
+import {useClipSelection} from '../state/selection';
 
 export function Clips() {
   const {state, dispatch, visibleClips, visibleImages, hotkey, notify, refreshPlaylists} =
@@ -22,6 +24,7 @@ export function Clips() {
     : null;
 
   const {actions, overlays} = useClipActions();
+  const selection = useClipSelection(visibleClips);
   // A playlist holds both kinds. All Clips stays clips only, and the Images
   // section stays images only, so this is the one screen that shows a mix.
   const images = playlist ? visibleImages : [];
@@ -132,6 +135,11 @@ export function Clips() {
               draggable
               isNew={recentNew.includes(clip.slug)}
               actions={actions}
+              selection={{
+                selected: selection.selected.has(clip.slug),
+                selecting: selection.selecting,
+                onPick: selection.pick,
+              }}
             />
           ))}
         </div>
@@ -219,6 +227,7 @@ export function Clips() {
         </p>
       </Modal>
 
+      <SelectionBar selection={selection} />
       {overlays}
       {imageOverlays}
     </div>

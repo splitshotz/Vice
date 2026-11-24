@@ -6,7 +6,7 @@ try:
 except ModuleNotFoundError:
     from tests import _sandbox
 
-from vice import editor, keys, playlists, updates
+from vice import editor, keys, playlists, updates, uploads
 from vice.runtime import actual_home_dir
 
 
@@ -15,7 +15,7 @@ class SandboxTests(unittest.TestCase):
         """Every module-level path a test can write through must be
         redirected. A new store needs a line in _sandbox.REDIRECTS."""
         home = actual_home_dir()
-        modules = {module for module, _ in _sandbox.REDIRECTS} | {editor, keys, playlists, updates}
+        modules = {module for module, _ in _sandbox.REDIRECTS} | {editor, keys, playlists, updates, uploads}
         for module in modules:
             for name, value in vars(module).items():
                 if not isinstance(value, Path) or not name.isupper():

@@ -1023,3 +1023,94 @@ select option {
   border-left: 8px solid currentColor;
 }
 
+
+/* ── media server ───────────────────────────────────────────────── */
+
+.media-servers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: 100%;
+}
+
+.media-empty {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.media-server {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-container);
+  background: var(--recessed);
+}
+
+.media-server-use {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 2px solid var(--color-text-secondary);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.media-server[data-active] .media-server-use {
+  border-color: var(--color-accent);
+  background: radial-gradient(circle, var(--color-accent) 0 4px, transparent 4.5px);
+}
+
+.media-server-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.media-server-text .mono {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-warn {
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+.media-add {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.media-form {
+  margin: var(--spacing-2) 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-container);
+  background: var(--vice-surface-low);
+}
+
+.media-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) 0 var(--spacing-1);
+}
+
+.media-test {
+  flex: 1;
+  color: var(--color-error);
+  font-size: 13px;
+}
+
+.media-test[data-ok] {
+  color: var(--color-accent);
+}

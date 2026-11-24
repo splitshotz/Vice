@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import secrets
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field, fields, asdict
@@ -341,6 +343,27 @@ class VoiceConfig:
     model_path: str = ""
 
 
+UPLOAD_KINDS = ("zipline", "s3")
+
+
+@dataclass
+class UploadConfig:
+    # Media servers clips can be uploaded to. Each entry is a table with an
+    # id, a name, a kind (zipline | s3) and the kind's own settings; see
+    # normalize_upload for the keys. Tokens and keys are never kept here:
+    # they live in upload_secrets.json next to this file, readable only by
+    # you.
+    servers: list[dict] = field(default_factory=list)
+    # Id of the server that uploads and share links use. Empty with servers
+    # set falls back to the first one.
+    active_server: str = ""
+    # Remove the local file once a clip is safely on the server. The clip
+    # stays in the library with a cloud badge and plays from the server.
+    delete_after_upload: bool = False
+    # How many clips go up at the same time, 1 to 4.
+    concurrency: int = 2
+
+
 @dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
@@ -353,6 +376,7 @@ class Config:
     ui: UIConfig = field(default_factory=UIConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
+    upload: UploadConfig = field(default_factory=UploadConfig)
 
 
 def _merge(defaults: dict, overrides: dict) -> dict:
@@ -524,6 +548,83 @@ def normalize_sharing(cfg: "Config") -> None:
     cfg.sharing.discord_max_mb = size if size in DISCORD_SIZE_CHOICES else 20
 
 
+_SERVER_FIELDS = {
+    "zipline": {"url": "", "folder": ""},
+    "s3": {"endpoint": "", "region": "", "bucket": "", "prefix": "",
+           "public_base_url": "", "presign_days": 7, "path_style": False},
+}
+
+
+def _clean_server(raw) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("kind") or "").strip().lower()
+    if kind not in UPLOAD_KINDS:
+        log.warning("upload server kind %r is unknown, dropping it", raw.get("kind"))
+        return None
+    server_id = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("id") or ""))[:32]
+    if not server_id:
+        server_id = secrets.token_hex(4)
+    out: dict = {
+        "id": server_id,
+        "kind": kind,
+        "name": str(raw.get("name") or "").strip()[:60] or kind.capitalize(),
+    }
+    for key, default in _SERVER_FIELDS[kind].items():
+        value = raw.get(key, default)
+        if value is None:
+            value = default
+        if isinstance(default, bool):
+            out[key] = bool(value)
+        elif isinstance(default, int):
+            try:
+                out[key] = max(1, min(int(value), 7))
+            except (TypeError, ValueError):
+                out[key] = default
+        else:
+            text = str(value).strip()
+            if key in ("url", "endpoint", "public_base_url"):
+                text = text.rstrip("/")
+            out[key] = text
+    return out
+
+
+def normalize_upload(cfg: "Config") -> None:
+    up = getattr(cfg, "upload", None)
+    if not isinstance(up, UploadConfig):
+        return
+    raw = up.servers if isinstance(up.servers, (list, tuple)) else []
+    seen: set[str] = set()
+    servers: list[dict] = []
+    for item in raw:
+        server = _clean_server(item)
+        if server is None:
+            continue
+        while server["id"] in seen:
+            server["id"] = secrets.token_hex(4)
+        seen.add(server["id"])
+        servers.append(server)
+    up.servers = servers
+    up.active_server = str(up.active_server or "")
+    if up.active_server not in seen:
+        up.active_server = servers[0]["id"] if servers else ""
+    up.delete_after_upload = bool(up.delete_after_upload)
+    try:
+        up.concurrency = max(1, min(int(up.concurrency), 4))
+    except (TypeError, ValueError):
+        up.concurrency = 2
+
+
+def active_upload_server(cfg: "Config") -> Optional[dict]:
+    up = getattr(cfg, "upload", None)
+    if not up or not up.servers:
+        return None
+    for server in up.servers:
+        if server.get("id") == up.active_server:
+            return server
+    return up.servers[0]
+
+
 def normalize_notifications(cfg: "Config") -> None:
     from .audio import normalize_pack  # audio imports nothing from config
     cfg.notifications.sound_pack = normalize_pack(cfg.notifications.sound_pack)
@@ -682,6 +783,7 @@ def load() -> Config:
         ui=UIConfig(**_known_keys(UIConfig, merged.get("ui", {}))),
         overlay=OverlayConfig(**_known_keys(OverlayConfig, merged.get("overlay", {}))),
         voice=VoiceConfig(**_known_keys(VoiceConfig, merged.get("voice", {}))),
+        upload=UploadConfig(**_known_keys(UploadConfig, merged.get("upload", {}))),
     )
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)
@@ -689,6 +791,7 @@ def load() -> Config:
     normalize_notifications(cfg)
     normalize_sharing(cfg)
     normalize_voice(cfg)
+    normalize_upload(cfg)
     return cfg
 
 

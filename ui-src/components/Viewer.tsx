@@ -17,6 +17,7 @@ import {clipTitle, imageTitle, type Clip, type Highlight} from '../lib/types';
 import {IconClose, IconExpand} from './Icons';
 import {ContextMenu} from './ContextMenu';
 import {usePlaylistToggleItems} from '../state/playlistItems';
+import {isCloudOnly, useCloudActions} from '../state/cloudActions';
 import {GameTagModal} from './GameTagModal';
 import {KeyOverlay} from './KeyOverlay';
 import type {KeyInterval} from '../lib/keyLayout';
@@ -138,6 +139,8 @@ export function Viewer(props: ViewerProps) {
   const [tagging, setTagging] = useState<Clip | null>(null);
   const playlistItems = usePlaylistToggleItems();
   const closePlaylistMenu = useCallback(() => setPlaylistMenu(null), []);
+  const cloud = useCloudActions();
+  const [cloudMenu, setCloudMenu] = useState<{x: number; y: number} | null>(null);
   // On top of the viewer's own Escape, so the first press closes the menu.
   useEscape(playlistMenu !== null, closePlaylistMenu);
   const [renamingTitle, setRenamingTitle] = useState(false);
@@ -830,9 +833,11 @@ export function Viewer(props: ViewerProps) {
                 <button type="button" className="btn btn-quiet btn-sm" onClick={() => setTagging(clip)}>
                   {t('viewer.game')}
                 </button>
-                <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onTrim(clip)}>
-                  {t('viewer.trim')}
-                </button>
+                {isCloudOnly(clip) ? null : (
+                  <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onTrim(clip)}>
+                    {t('viewer.trim')}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-quiet btn-sm"
@@ -844,8 +849,20 @@ export function Viewer(props: ViewerProps) {
                   }}>
                   {t('viewer.share')}
                 </button>
-                <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onReveal(clip)}>
-                  {t('viewer.reveal')}
+                {isCloudOnly(clip) ? null : (
+                  <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onReveal(clip)}>
+                    {t('viewer.reveal')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  aria-haspopup="menu"
+                  onClick={e => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setCloudMenu({x: r.left, y: r.bottom + 6});
+                  }}>
+                  {t('cloud.viewerButton')}
                 </button>
                 <button
                   type="button"
@@ -887,6 +904,16 @@ export function Viewer(props: ViewerProps) {
           emptyLabel={t('viewer.noPlaylists')}
           items={playlistItems(clip)}
           onClose={closePlaylistMenu}
+        />
+      ) : null}
+
+      {cloudMenu && clip ? (
+        <ContextMenu
+          at={cloudMenu}
+          heading={clip.cloud?.server_name || t('cloud.viewerButton')}
+          emptyLabel={t('cloud.noServer')}
+          items={cloud.menuItems(clip)}
+          onClose={() => setCloudMenu(null)}
         />
       ) : null}
 

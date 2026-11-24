@@ -10,6 +10,7 @@ import {Modal} from '../components/Modal';
 import {useStore} from './store';
 import {usePlayback} from './playback';
 import {usePlaylistToggleItems} from './playlistItems';
+import {isCloudOnly, useCloudActions} from './cloudActions';
 import {t} from '../lib/i18n';
 
 /**
@@ -65,7 +66,15 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const playlistItems = usePlaylistToggleItems();
 
   const [menu, setMenu] = useState<{clip: Clip; at: {x: number; y: number}} | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
+  const [confirmDelete, setConfirmDeleteRaw] = useState<Clip | null>(null);
+  // Off for a clip that is also here: the server copy is the backup. On for
+  // a cloud clip, which would otherwise linger on the server, unlisted.
+  const [alsoRemote, setAlsoRemote] = useState(false);
+  const setConfirmDelete = useCallback((clip: Clip | null) => {
+    setAlsoRemote(clip ? isCloudOnly(clip) : false);
+    setConfirmDeleteRaw(clip);
+  }, []);
+  const cloud = useCloudActions();
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [tagging, setTagging] = useState<Clip | null>(null);
@@ -85,18 +94,18 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
   const copyLink = useCallback(
     (clip: Clip) => {
       const currentClip = state.clips.find(candidate => candidate.slug === clip.slug) ?? clip;
-      void copyShareLink(currentClip, notify, setManualCopy);
+      void copyShareLink(currentClip, notify, setManualCopy, state.uploadServers);
     },
-    [notify, state.clips],
+    [notify, state.clips, state.uploadServers],
   );
 
   const discordFile = Boolean(state.config?.sharing?.share_discord_file);
   const share = useCallback(
     (clip: Clip) => {
       const currentClip = state.clips.find(candidate => candidate.slug === clip.slug) ?? clip;
-      void shareClip(currentClip, discordFile, notify, setManualCopy);
+      void shareClip(currentClip, discordFile, notify, setManualCopy, state.uploadServers);
     },
-    [discordFile, notify, state.clips],
+    [discordFile, notify, state.clips, state.uploadServers],
   );
 
   const reveal = useCallback(
@@ -136,7 +145,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
       renamingSlug: renaming,
       onRenameDone: () => setRenaming(null),
     }),
-    [openViewer, openTrim, openShare, share, discordFile, copyFile, reveal, rename, renaming],
+    [openViewer, openTrim, openShare, share, discordFile, copyFile, reveal, rename, renaming, setConfirmDelete],
   );
 
   const menuClip = menu?.clip;
@@ -150,8 +159,19 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
           onClose={() => setMenu(null)}
           items={[
             {id: 'open', label: t('card.open'), onSelect: () => openViewer(menuClip.slug)},
-            {id: 'trim', label: t('card.trim'), onSelect: () => openTrim(menuClip.slug)},
-            {id: 'rename', label: t('card.rename'), onSelect: () => setRenaming(menuClip.slug)},
+            // A cloud clip has no file here to cut or rename.
+            {
+              id: 'trim',
+              label: t('card.trim'),
+              disabled: isCloudOnly(menuClip),
+              onSelect: () => openTrim(menuClip.slug),
+            },
+            {
+              id: 'rename',
+              label: t('card.rename'),
+              disabled: isCloudOnly(menuClip),
+              onSelect: () => setRenaming(menuClip.slug),
+            },
             {id: 'game', label: t('card.setGame'), onSelect: () => setTagging(menuClip)},
             {
               id: 'copy-link',
@@ -159,8 +179,14 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
               disabled: !menuClip.share_url,
               onSelect: () => copyLink(menuClip),
             },
-            {id: 'copy-file', label: t('card.copyVideoShort'), onSelect: () => copyFile(menuClip)},
-            {id: 'reveal', label: t('card.reveal'), onSelect: () => reveal(menuClip)},
+            ...(isCloudOnly(menuClip)
+              ? []
+              : [
+                  {id: 'copy-file', label: t('card.copyVideoShort'), onSelect: () => copyFile(menuClip)},
+                  {id: 'reveal', label: t('card.reveal'), onSelect: () => reveal(menuClip)},
+                ]),
+            {id: 'sep-cloud', separator: true},
+            ...cloud.menuItems(menuClip),
             ...(playlists.length ? [{id: 'sep-playlists', separator: true} as const] : []),
             ...playlistItems(menuClip),
             {id: 'sep-delete', separator: true},
@@ -191,7 +217,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
                 setConfirmDelete(null);
                 if (!clip) return;
                 void api
-                  .deleteClip(clip.slug)
+                  .deleteClip(clip.slug, {remote: Boolean(clip.cloud) && alsoRemote})
                   .then(() => say(t('viewer.clipDeleted')))
                   .catch(fail(t('viewer.errDelete')));
               }}>
@@ -204,6 +230,12 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
             name: confirmDelete ? clipTitle(confirmDelete) : '',
           })}
         </p>
+        {confirmDelete?.cloud ? (
+          <label className="modal-check">
+            <input type="checkbox" checked={alsoRemote} onChange={e => setAlsoRemote(e.target.checked)} />
+            <span>{t('cloud.alsoDeleteRemote', {server: confirmDelete.cloud.server_name})}</span>
+          </label>
+        ) : null}
       </Modal>
 
       <GameTagModal clip={tagging} onClose={() => setTagging(null)} />

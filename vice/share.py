@@ -31,6 +31,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ from aiohttp import WSMsgType, web
 
 from . import __version__
 from . import keys as keystore
+from . import uploads as upstore
 from .editor import (DISCORD_MAX_BYTES, DISCORD_MAX_MB, DiscordTooLarge, EditorProjectStore,
                      ExportBusy, ExportManager, KeyBurn, Source, build_export_cmd,
                      canvas_for,
@@ -1162,6 +1164,13 @@ class ShareServer:
         self._clip_games = _load_clip_games()
         self._share_tokens = _load_share_tokens()
         self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
+        # slug -> what is on a media server (see uploads.py). A slug with a
+        # record and no file on disk is a cloud clip.
+        self._uploads = upstore.load_records()
+        self.uploader = upstore.UploadManager(self)
+        # server id -> (checked at, reachable). A short memory, so copying
+        # several links in a row does not wait on the same check each time.
+        self._server_health: dict[str, tuple[float, bool]] = {}
         self.editor_project = EditorProjectStore()
         self._exports = ExportManager(self.broadcast)
 
@@ -1236,6 +1245,17 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
         r.add_post("/api/clips/{slug}/share-link",        self._api_new_share_link)
+        r.add_post("/api/clips/{slug}/download",          self._api_cloud_download)
+        r.add_get("/api/clips/{slug}/share",              self._api_resolve_share)
+        r.add_delete("/api/clips/{slug}/cloud",           self._api_cloud_remove)
+        r.add_get("/api/upload/servers",                  self._api_upload_servers)
+        r.add_post("/api/upload/servers",                 self._api_upload_server_save)
+        r.add_delete("/api/upload/servers/{sid}",         self._api_upload_server_delete)
+        r.add_post("/api/upload/servers/{sid}/test",      self._api_upload_server_test)
+        r.add_post("/api/upload/test",                    self._api_upload_server_test)
+        r.add_get("/api/uploads",                         self._api_uploads)
+        r.add_post("/api/uploads",                        self._api_uploads_enqueue)
+        r.add_post("/api/uploads/{slug}/cancel",          self._api_upload_cancel)
         r.add_get("/api/clips/{slug}/discord",            self._api_discord_copy)
         r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
         r.add_get("/api/clips/{slug}/audio/{index}",      self._audio_track)
@@ -1298,6 +1318,7 @@ class ShareServer:
             for clip in sorted(media, key=lambda p: p.stat().st_mtime):
                 self._clips[clip.stem] = clip
         self._ensure_share_tokens()
+        self._reconcile_uploads()
         self.rescan_images()
         # Both indexes in one call. backfill drops membership for anything not
         # in the set it is given, so handing it the clips alone would empty
@@ -1384,6 +1405,9 @@ class ShareServer:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self._exports.stop()
+        uploader = getattr(self, "uploader", None)
+        if uploader is not None:
+            await uploader.stop()
         for ws in list(self._ws_clients):
             try:
                 await ws.close()
@@ -1495,6 +1519,16 @@ class ShareServer:
             _save_share_tokens(self._share_tokens)
 
     def share_url(self, slug: str) -> str:
+        # On a media server, the server's link is the one to hand out: it
+        # works with this PC off and needs no tunnel.
+        record = self._uploads.get(slug)
+        if record and record.get("url"):
+            return str(record["url"])
+        return self._own_share_url(slug)
+
+    def _own_share_url(self, slug: str) -> str:
+        """The link this PC serves itself: the tunnel, the base URL override,
+        or the LAN address, whichever there is."""
         base = self.public_base_url() or self.local_base_url() or ""
         token = self._share_tokens.get(slug) or self._issue_share_token(slug)
         return f"{base}/c/{token}"
@@ -1507,7 +1541,7 @@ class ShareServer:
         tokens so a share link that fell back to the local address still
         opens on this machine.
         """
-        if allow_slug and ref in self._clips:
+        if allow_slug and (ref in self._clips or ref in self._uploads):
             return ref
         return self._share_slugs.get(ref)
 
@@ -1527,12 +1561,12 @@ class ShareServer:
     def _share_links_update(self) -> dict:
         return {
             "type": "share_links_changed",
-            "links": {slug: self.share_url(slug) for slug in self._clips},
+            "links": {slug: self.share_url(slug) for slug in set(self._clips) | set(self._uploads)},
             "share_is_public": self.public_is_reachable(),
         }
 
     async def _broadcast_share_links(self) -> None:
-        if self._clips:
+        if self._clips or self._uploads:
             await self.broadcast(self._share_links_update())
 
     async def broadcast(self, msg: dict) -> None:
@@ -1647,7 +1681,267 @@ class ShareServer:
             # browser may play a cached older video for the clip it shows.
             "video_url":  f"/v/{enc}?v={thumb_rev}",
             "thumb_url":  thumb_url,
+            "cloud":      self._cloud_info(slug),
         }
+
+    # ── media server uploads ──────────────────────────────────────────────────
+
+    def upload_server(self, server_id: Optional[str] = None) -> Optional[dict]:
+        """A configured media server by id, or the active one."""
+        from .config import active_upload_server
+        up = getattr(self.cfg, "upload", None)
+        if up is None:
+            return None
+        if server_id:
+            return next((s for s in up.servers if s.get("id") == server_id), None)
+        return active_upload_server(self.cfg)
+
+    def slug_for_path(self, path: Path) -> Optional[str]:
+        return next((slug for slug, p in self._clips.items() if p == path), None)
+
+    def _save_uploads(self) -> None:
+        upstore.save_records(self._uploads)
+
+    def _is_cloud_only(self, slug: str) -> bool:
+        if slug not in self._uploads:
+            return False
+        path = self._clips.get(slug)
+        return path is None or not path.exists()
+
+    def _reconcile_uploads(self) -> None:
+        """A cloud clip whose file is back in the folder is local again."""
+        changed = False
+        for slug, record in self._uploads.items():
+            local = slug in self._clips
+            if bool(record.get("local")) != local and local:
+                record["local"] = True
+                changed = True
+        if changed:
+            self._save_uploads()
+
+    def _cloud_info(self, slug: str) -> Optional[dict]:
+        record = self._uploads.get(slug)
+        if not record:
+            return None
+        server = self.upload_server(record.get("server_id")) or {}
+        return {
+            "server_id": record.get("server_id", ""),
+            "server_name": server.get("name") or record.get("server_name") or "",
+            "url": record.get("url", ""),
+            "uploaded_at": record.get("uploaded_at", ""),
+            "local": not self._is_cloud_only(slug),
+        }
+
+    def _cloud_clip_json(self, slug: str) -> dict:
+        """A clip that is only on a media server, built from its record."""
+        record = self._uploads[slug]
+        meta = record.get("meta") or {}
+        enc = quote(slug, safe="")
+        rev = quote(str(record.get("uploaded_at") or "cloud"), safe="")
+        has_thumb = upstore.cloud_thumb_path(slug).exists()
+        return {
+            "slug":       slug,
+            "name":       record.get("name") or slug,
+            "size":       record.get("size", 0),
+            "created_at": meta.get("created_at", ""),
+            "game":       self._clip_game(slug),
+            "preview":    "none",
+            "views":      self._views.get(slug, 0),
+            "keys":       keystore.sidecar_path(slug).exists(),
+            "duration":   meta.get("duration", 0),
+            "width":      meta.get("width", 0),
+            "height":     meta.get("height", 0),
+            "vcodec":     meta.get("vcodec", ""),
+            "audio_tracks": [],
+            "unreadable": False,
+            "unreadable_reason": "",
+            "share_url":  self.share_url(slug),
+            "share_is_public": True,
+            "video_url":  f"/v/{enc}?v={rev}",
+            "thumb_url":  f"/t/{enc}?v={rev}" if has_thumb else None,
+            "cloud":      self._cloud_info(slug),
+        }
+
+    def _any_clip_json(self, slug: str) -> Optional[dict]:
+        if self._is_cloud_only(slug):
+            return self._cloud_clip_json(slug)
+        path = self._clips.get(slug)
+        if path is None or not path.exists():
+            return None
+        return self._clip_json(slug, path, self._meta.get(slug, {}))
+
+    async def _broadcast_any_clip(self, slug: str) -> None:
+        clip = self._any_clip_json(slug)
+        if clip is not None:
+            await self.broadcast({"type": "clip_saved", "clip": clip})
+
+    async def on_uploaded(self, slug: str, record: dict) -> None:
+        """Called by the upload queue once a clip is on a server."""
+        path = self._clips.get(slug)
+        meta: dict = {}
+        if path is not None and path.exists():
+            probed = await self._get_meta(slug, path)
+            st = path.stat()
+            meta = {
+                "duration": probed.get("duration", 0),
+                "width": probed.get("width", 0),
+                "height": probed.get("height", 0),
+                "vcodec": probed.get("vcodec", ""),
+                "created_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+            }
+        record["meta"] = meta
+        server = self.upload_server(record.get("server_id")) or {}
+        record["server_name"] = server.get("name", "")
+        if record.get("server_id"):
+            # It just took a whole clip, so it is up.
+            self._server_health[record["server_id"]] = (time.monotonic(), True)
+        self._uploads[slug] = record
+        self._save_uploads()
+        await self._broadcast_any_clip(slug)
+        await self._broadcast_share_links()
+
+    async def _refresh_cloud_url(self, slug: str, *, force: bool = False) -> Optional[str]:
+        """Presigned S3 links expire, so mint a new one when it is a day old."""
+        record = self._uploads.get(slug)
+        if not record:
+            return None
+        server = self.upload_server(record.get("server_id"))
+        if not server or server.get("kind") != "s3" or server.get("public_base_url"):
+            return record.get("url")
+        if not force and time.time() - float(record.get("url_at") or 0) < 86400:
+            return record.get("url")
+        try:
+            provider = await self.uploader.provider(server)
+            record["url"] = await provider.stream_url(upstore.remote_ref(record))
+            record["url_at"] = time.time()
+            self._save_uploads()
+        except Exception as exc:
+            log.warning("Could not refresh the link of %s: %s", slug, exc)
+        return record.get("url")
+
+    SERVER_CHECK_TIMEOUT = 2.0
+    SERVER_CHECK_TTL = 30.0
+
+    async def _server_reachable(self, server_id: str, url: str) -> bool:
+        """Whether the server will hand this link out right now. Asks for one
+        byte of the file itself, which an S3 presigned link (signed for GET
+        only) and Zipline both answer, and which also catches a file that is
+        gone from the server."""
+        cached = self._server_health.get(server_id)
+        if cached and time.monotonic() - cached[0] < self.SERVER_CHECK_TTL:
+            return cached[1]
+        import aiohttp
+        ok = False
+        try:
+            session = await self.uploader.session()
+            async with session.get(
+                url,
+                headers={"Range": "bytes=0-0"},
+                timeout=aiohttp.ClientTimeout(total=self.SERVER_CHECK_TIMEOUT),
+            ) as resp:
+                ok = resp.status < 400
+        except Exception as exc:
+            log.info("Media server for %s did not answer: %s", url.split("?", 1)[0], exc)
+        self._server_health[server_id] = (time.monotonic(), ok)
+        return ok
+
+    async def _api_resolve_share(self, req: web.Request) -> web.Response:
+        """The link to copy for a clip, checked. An uploaded clip gets its
+        server's link while the server answers. When it does not and the file
+        is still here, the link this PC serves (tunnel or LAN) stands in."""
+        slug = req.match_info["slug"]
+        if slug not in self._clips and slug not in self._uploads:
+            raise web.HTTPNotFound()
+        record = self._uploads.get(slug)
+        if not record:
+            return web.json_response({
+                "share_url": self.share_url(slug), "via": "local",
+                "share_is_public": self.public_is_reachable(),
+            })
+        server = self.upload_server(record.get("server_id")) or {}
+        name = server.get("name") or record.get("server_name") or ""
+        url = await self._refresh_cloud_url(slug) or record.get("url", "")
+        if server and url and await self._server_reachable(server["id"], url):
+            return web.json_response({"share_url": url, "via": "server",
+                                      "server_name": name, "share_is_public": True})
+        if not self._is_cloud_only(slug):
+            return web.json_response({
+                "share_url": self._own_share_url(slug), "via": "fallback",
+                "server_name": name, "share_is_public": self.public_is_reachable(),
+            })
+        return web.json_response({"share_url": url, "via": "server_down",
+                                  "server_name": name, "share_is_public": True})
+
+    async def _remote_delete(self, slug: str) -> Optional[str]:
+        """Remove a clip's copy from its server. Returns an error, or None."""
+        record = self._uploads.get(slug)
+        if not record:
+            return None
+        server = self.upload_server(record.get("server_id"))
+        if server is None:
+            return "That media server is no longer set up, so the copy there was left alone."
+        try:
+            provider = await self.uploader.provider(server)
+            await provider.delete(upstore.remote_ref(record))
+        except Exception as exc:
+            log.warning("Removing %s from %s failed: %s", slug, server.get("name"), exc)
+            return str(exc) or exc.__class__.__name__
+        return None
+
+    def _forget_upload(self, slug: str) -> None:
+        if self._uploads.pop(slug, None) is not None:
+            self._save_uploads()
+        upstore.drop_cloud_thumb(slug)
+
+    async def delete_local(self, slug: str, *, keep_cloud: bool) -> bool:
+        """Remove a clip's file and its local caches.
+
+        With keep_cloud the clip stays in the library as a cloud clip: its
+        highlights, keys, views, game, playlists and share link all stay,
+        since the clip itself is still there. Without it, everything about
+        the clip goes, as a plain delete always did.
+        """
+        path = self._clips.get(slug)
+        if keep_cloud:
+            if slug not in self._uploads:
+                return False
+            if path is not None and path.exists():
+                upstore.snapshot_thumb(slug, _thumb_path(path))
+            self._clips.pop(slug, None)
+            _purge_clip_discord(path)
+            if path and path.exists():
+                path.unlink()
+            _purge_slug_thumbs(slug)
+            _purge_slug_proxies(slug)
+            self._meta.pop(slug, None)
+            self._uploads[slug]["local"] = False
+            self._save_uploads()
+            if self.editor_project.on_clip_deleted(slug):
+                await self.broadcast({"type": "editor_project_changed"})
+            await self._broadcast_any_clip(slug)
+            return True
+
+        self._clips.pop(slug, None)
+        _purge_clip_discord(path)
+        if path and path.exists():
+            path.unlink()
+        _purge_slug_thumbs(slug)
+        _purge_slug_proxies(slug)
+        (HIGHLIGHTS_DIR / f"{slug}.json").unlink(missing_ok=True)
+        keystore.delete_sidecar(slug)
+        self._meta.pop(slug, None)
+        if self._views.pop(slug, None) is not None:
+            _save_views(self._views)
+        if self._clip_games.pop(slug, None) is not None:
+            self._save_clip_games()
+        self._forget_share_token(slug)
+        self._forget_upload(slug)
+        if self.playlists.on_clip_deleted(slug):
+            await self._broadcast_playlists()
+        if self.editor_project.on_clip_deleted(slug):
+            await self.broadcast({"type": "editor_project_changed"})
+        await self.broadcast({"type": "clip_deleted", "slug": slug})
+        return True
 
     # ── images ────────────────────────────────────────────────────────────────
 
@@ -1792,8 +2086,18 @@ class ShareServer:
             raise web.HTTPNotFound()
         return slug, path
 
+    async def _cloud_redirect(self, slug: str):
+        url = await self._refresh_cloud_url(slug)
+        if not url:
+            raise web.HTTPNotFound()
+        raise web.HTTPFound(url)
+
     async def _serve_embed_page(self, req: web.Request, *, public: bool) -> web.Response:
         ref = req.match_info["ref"]
+        cloud_slug = self._slug_for_ref(ref, allow_slug=not public)
+        if cloud_slug and self._is_cloud_only(cloud_slug):
+            # An old tunnel link to a clip that moved to a server.
+            await self._cloud_redirect(cloud_slug)
         slug, path = self._clip_for_ref(ref, public=public)
         meta = await self._get_meta(slug, path)
         # cloudflared terminates TLS and forwards plain HTTP, so req.scheme
@@ -1840,6 +2144,8 @@ class ShareServer:
             # Embed pages link the file with its container suffix. Exact
             # match first so slugs that themselves contain dots keep working.
             slug = self._slug_for_ref(ref.rsplit(".", 1)[0], allow_slug=not public)
+        if slug and self._is_cloud_only(slug):
+            await self._cloud_redirect(slug)
         path = self._clips.get(slug) if slug else None
         if not path or not path.exists():
             raise web.HTTPNotFound()
@@ -2003,6 +2309,12 @@ class ShareServer:
         return await self._serve_thumb(req, public=True)
 
     async def _serve_thumb(self, req: web.Request, *, public: bool) -> web.Response:
+        cloud_slug = self._slug_for_ref(req.match_info["ref"], allow_slug=not public)
+        if cloud_slug and self._is_cloud_only(cloud_slug):
+            thumb = upstore.cloud_thumb_path(cloud_slug)
+            if not thumb.exists():
+                raise web.HTTPNotFound()
+            return web.FileResponse(thumb, headers={"Content-Type": "image/jpeg"})
         slug, path = self._clip_for_ref(req.match_info["ref"], public=public)
         meta = await self._get_meta(slug, path)
         t = await _make_thumb(path, duration=meta.get("duration", 0))
@@ -2036,10 +2348,17 @@ class ShareServer:
         )
 
         result = [self._clip_json(slug, path, metas[slug]) for slug, path in items]
+        cloud = [slug for slug in self._uploads if self._is_cloud_only(slug)]
+        for slug in self._uploads:
+            await self._refresh_cloud_url(slug)
+        result.extend(self._cloud_clip_json(slug) for slug in cloud)
+        result.sort(key=lambda c: c.get("created_at") or "", reverse=True)
         return web.json_response({"clips": result})
 
     async def _api_clip_info(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
+        if self._is_cloud_only(slug):
+            return web.json_response(self._cloud_clip_json(slug))
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
@@ -2047,28 +2366,28 @@ class ShareServer:
         return web.json_response(self._clip_json(slug, path, meta))
 
     async def _api_delete(self, req: web.Request) -> web.Response:
+        """Delete a clip. ``?keep_cloud=1`` only removes the local file of a
+        clip that is on a server; ``?remote=1`` also removes the server's
+        copy. A plain delete leaves anything on a server where it is."""
         slug = req.match_info["slug"]
         if slug in self._trimming:
             return self._trim_running_response()
-        path = self._clips.pop(slug, None)
-        _purge_clip_discord(path)
-        if path and path.exists():
-            path.unlink()
-        _purge_slug_thumbs(slug)
-        _purge_slug_proxies(slug)
-        (HIGHLIGHTS_DIR / f"{slug}.json").unlink(missing_ok=True)
-        keystore.delete_sidecar(slug)
-        self._meta.pop(slug, None)
-        if self._views.pop(slug, None) is not None:
-            _save_views(self._views)
-        if self._clip_games.pop(slug, None) is not None:
-            self._save_clip_games()
-        self._forget_share_token(slug)
-        if self.playlists.on_clip_deleted(slug):
-            await self._broadcast_playlists()
-        if self.editor_project.on_clip_deleted(slug):
-            await self.broadcast({"type": "editor_project_changed"})
-        await self.broadcast({"type": "clip_deleted", "slug": slug})
+        if self.uploader.busy(slug):
+            return web.json_response(
+                {"ok": False, "error": "That clip is uploading. Cancel the upload first."},
+                status=409)
+        if req.query.get("keep_cloud") == "1":
+            if self._is_cloud_only(slug):
+                return web.json_response({"ok": True})
+            if not await self.delete_local(slug, keep_cloud=True):
+                return web.json_response(
+                    {"ok": False, "error": "That clip is not on a media server."}, status=409)
+            return web.json_response({"ok": True})
+        if req.query.get("remote") == "1":
+            error = await self._remote_delete(slug)
+            if error:
+                return web.json_response({"ok": False, "error": error}, status=502)
+        await self.delete_local(slug, keep_cloud=False)
         return web.json_response({"ok": True})
 
     async def _api_trim(self, req: web.Request) -> web.Response:
@@ -2258,8 +2577,13 @@ class ShareServer:
             return web.json_response({"ok": False, "error": "that name will not work as a file"})
 
         new_path = path.parent / f"{stem}{ext}"
-        if new_path.exists() and new_path != path:
+        if (new_path.exists() and new_path != path) or (
+                new_path.stem != slug and self._is_cloud_only(new_path.stem)):
             return web.json_response({"ok": False, "error": "A clip with that name already exists"})
+        if self.uploader.busy(slug):
+            return web.json_response(
+                {"ok": False, "error": "That clip is uploading. Rename it once it is done."},
+                status=409)
 
         # A rename keeps the file's size and modification time, so the cached
         # thumbnail and previews are still valid. Purging them made an H.265
@@ -2306,6 +2630,12 @@ class ShareServer:
             self._views[new_slug] = self._views.pop(slug)
             _save_views(self._views)
         self._move_share_token(slug, new_slug)
+        if slug != new_slug and slug in self._uploads:
+            record = self._uploads.pop(slug)
+            # The server keeps the name it was given; only Vice's name moves.
+            record["name"] = new_path.name
+            self._uploads[new_slug] = record
+            self._save_uploads()
 
         # Tell the UI: old card gone, new card appears
         await self.broadcast({"type": "clip_deleted", "slug": slug})
@@ -2339,8 +2669,14 @@ class ShareServer:
         """Give the clip a new share link. The old one stops working, which
         is the point: it is how a link that got around is taken back (#213)."""
         slug = req.match_info["slug"]
-        if slug not in self._clips:
+        if slug not in self._clips and slug not in self._uploads:
             raise web.HTTPNotFound()
+        if slug in self._uploads:
+            # The server's link is the server's to change. A new presigned
+            # link is the one thing that can be minted here.
+            await self._refresh_cloud_url(slug, force=True)
+            await self._broadcast_share_links()
+            return web.json_response({"ok": True, "share_url": self.share_url(slug)})
         self._issue_share_token(slug)
         await self._broadcast_share_links()
         return web.json_response({"ok": True, "share_url": self.share_url(slug)})
@@ -2944,6 +3280,202 @@ class ShareServer:
         asyncio.create_task(_exit())
         return web.json_response({"ok": True})
 
+    # ── media server REST ─────────────────────────────────────────────────────
+
+    def _servers_payload(self) -> dict:
+        secrets_ = upstore.load_secrets()
+        up = self.cfg.upload
+        active = self.upload_server()
+        return {
+            "servers": [
+                {**server, "has_secret": upstore.has_secret(server["kind"], secrets_.get(server["id"]))}
+                for server in up.servers
+            ],
+            "active_server": active["id"] if active else "",
+            "delete_after_upload": up.delete_after_upload,
+            "concurrency": up.concurrency,
+        }
+
+    def _store_upload_config(self, mutate: Callable) -> None:
+        """Change the [upload] section on disk and in memory, leaving every
+        other section exactly as it was saved."""
+        from .config import load as load_cfg, normalize_upload, save as save_cfg
+        cfg = load_cfg()
+        mutate(cfg.upload)
+        normalize_upload(cfg)
+        save_cfg(cfg)
+        self.cfg.upload = cfg.upload
+
+    async def _api_upload_servers(self, _: web.Request) -> web.Response:
+        return web.json_response(self._servers_payload())
+
+    async def _api_upload_server_save(self, req: web.Request) -> web.Response:
+        """Add or change a server. Body: {server: {...}, secret?: {...},
+        activate?: bool}. A secret left out keeps the saved one."""
+        from .config import _clean_server
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        server = _clean_server((body or {}).get("server"))
+        if server is None:
+            return web.json_response({"ok": False, "error": "Pick Zipline or S3."}, status=400)
+        if server["kind"] == "zipline" and not server["url"]:
+            return web.json_response({"ok": False, "error": "The server address is required."}, status=400)
+        if server["kind"] == "s3" and not (server["endpoint"] and server["bucket"]):
+            return web.json_response({"ok": False, "error": "The endpoint and bucket are required."}, status=400)
+        secret = upstore.clean_secret(server["kind"], body.get("secret"))
+        if secret:
+            secrets_ = upstore.load_secrets()
+            # Switching kinds drops the other kind's keys.
+            kept = {k: v for k, v in secrets_.get(server["id"], {}).items()
+                    if k in upstore.SECRET_FIELDS[server["kind"]]}
+            secrets_[server["id"]] = {**kept, **secret}
+            upstore.save_secrets(secrets_)
+
+        def mutate(up) -> None:
+            servers = [s for s in up.servers if s.get("id") != server["id"]]
+            index = next((i for i, s in enumerate(up.servers) if s.get("id") == server["id"]),
+                         len(servers))
+            servers.insert(index, server)
+            up.servers = servers
+            if body.get("activate") or not up.active_server:
+                up.active_server = server["id"]
+        self._store_upload_config(mutate)
+        await self._broadcast_upload_servers()
+        return web.json_response({"ok": True, "id": server["id"], **self._servers_payload()})
+
+    async def _api_upload_server_delete(self, req: web.Request) -> web.Response:
+        sid = req.match_info["sid"]
+
+        def mutate(up) -> None:
+            up.servers = [s for s in up.servers if s.get("id") != sid]
+            if up.active_server == sid:
+                up.active_server = ""
+        self._store_upload_config(mutate)
+        secrets_ = upstore.load_secrets()
+        if secrets_.pop(sid, None) is not None:
+            upstore.save_secrets(secrets_)
+        await self._broadcast_upload_servers()
+        return web.json_response({"ok": True, **self._servers_payload()})
+
+    async def _api_upload_server_test(self, req: web.Request) -> web.Response:
+        """Try a server's address and keys. Takes the unsaved form in the body
+        so a typo shows up before it is saved."""
+        from .config import _clean_server
+        from .uploaders import make_provider
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        sid = req.match_info.get("sid")
+        server = _clean_server(body.get("server")) if body.get("server") else None
+        if server is None and sid:
+            server = self.upload_server(sid)
+        if server is None:
+            return web.json_response({"ok": False, "error": "No such server."}, status=404)
+        secret = {
+            **upstore.load_secrets().get(server["id"], {}),
+            **upstore.clean_secret(server["kind"], body.get("secret")),
+        }
+        if not upstore.has_secret(server["kind"], secret):
+            return web.json_response({"ok": False, "error": "Fill in the token or keys first."})
+        try:
+            provider = make_provider(server, secret, await self.uploader.session())
+            detail = await provider.test()
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc) or exc.__class__.__name__})
+        return web.json_response({"ok": True, "detail": detail or ""})
+
+    async def _broadcast_upload_servers(self) -> None:
+        await self.broadcast({"type": "upload_servers", **self._servers_payload()})
+        # Server names show on cloud badges.
+        for slug in list(self._uploads):
+            await self._broadcast_any_clip(slug)
+
+    async def _api_uploads(self, _: web.Request) -> web.Response:
+        return web.json_response({"items": self.uploader.queue_state()})
+
+    async def _api_uploads_enqueue(self, req: web.Request) -> web.Response:
+        """Queue clips for upload. Body: {slugs: [...], server_id?}."""
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        slugs = [str(s) for s in (body.get("slugs") or []) if isinstance(s, str)]
+        server = self.upload_server(body.get("server_id") or None)
+        if server is None:
+            return web.json_response(
+                {"ok": False, "error": "Set up a media server in Settings first."}, status=409)
+        if not upstore.has_secret(server["kind"], upstore.load_secrets().get(server["id"])):
+            return web.json_response(
+                {"ok": False, "error": f"{server['name']} has no token or keys saved."}, status=409)
+        # A clip already on this server is not sent twice.
+        wanted = [s for s in slugs if (self._uploads.get(s) or {}).get("server_id") != server["id"]]
+        accepted = await self.uploader.enqueue(wanted, server["id"])
+        return web.json_response({"ok": True, "queued": accepted,
+                                  "skipped": [s for s in slugs if s not in accepted]})
+
+    async def _api_upload_cancel(self, req: web.Request) -> web.Response:
+        return web.json_response({"ok": self.uploader.cancel(req.match_info["slug"])})
+
+    async def _api_cloud_download(self, req: web.Request) -> web.Response:
+        """Bring a cloud clip's file back into the clips folder."""
+        slug = req.match_info["slug"]
+        if not self._is_cloud_only(slug):
+            raise web.HTTPNotFound()
+        record = self._uploads[slug]
+        server = self.upload_server(record.get("server_id"))
+        if server is None:
+            return web.json_response(
+                {"ok": False, "error": "That media server is no longer set up."}, status=409)
+        out_dir = resolve_path(self.cfg.output.directory)
+        dest = out_dir / (record.get("name") or f"{slug}.mp4")
+        if dest.exists():
+            return web.json_response(
+                {"ok": False, "error": f"{dest.name} is already in the clips folder."}, status=409)
+        part = dest.with_name(dest.name + ".part")
+        await self.broadcast({"type": "upload_queue", "items": [
+            *self.uploader.queue_state(), {"slug": slug, "state": "downloading", "sent": 0,
+                                           "total": record.get("size", 0), "server_id": server["id"]}]})
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            provider = await self.uploader.provider(server)
+
+            def progress(sent: int, total: int) -> None:
+                asyncio.get_running_loop().create_task(self.broadcast({
+                    "type": "upload_progress", "slug": slug, "sent": sent, "total": total}))
+            await provider.download(upstore.remote_ref(record), part, progress)
+            part.replace(dest)
+        except Exception as exc:
+            part.unlink(missing_ok=True)
+            await self.broadcast({"type": "upload_queue", "items": self.uploader.queue_state()})
+            return web.json_response({"ok": False, "error": str(exc) or exc.__class__.__name__},
+                                     status=502)
+        self._clips[slug] = dest
+        record["local"] = True
+        self._save_uploads()
+        upstore.drop_cloud_thumb(slug)
+        await self.broadcast({"type": "upload_queue", "items": self.uploader.queue_state()})
+        asyncio.create_task(self._broadcast_clip(slug, dest))
+        return web.json_response({"ok": True})
+
+    async def _api_cloud_remove(self, req: web.Request) -> web.Response:
+        """Take a clip off its server. A clip that only lived there is gone."""
+        slug = req.match_info["slug"]
+        if slug not in self._uploads:
+            raise web.HTTPNotFound()
+        error = await self._remote_delete(slug)
+        if error and req.query.get("force") != "1":
+            return web.json_response({"ok": False, "error": error}, status=502)
+        if self._is_cloud_only(slug):
+            await self.delete_local(slug, keep_cloud=False)
+        else:
+            self._forget_upload(slug)
+            await self._broadcast_any_clip(slug)
+            await self._broadcast_share_links()
+        return web.json_response({"ok": True})
+
     async def _api_get_config(self, _: web.Request) -> web.Response:
         from .config import load as load_cfg
         return web.json_response(asdict(load_cfg()))
@@ -2966,11 +3498,11 @@ class ShareServer:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
-            UIConfig, OverlayConfig, VoiceConfig,
+            UIConfig, OverlayConfig, VoiceConfig, UploadConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets, normalize_notifications,
             normalize_sharing,
             normalize_overlay,
-            normalize_voice,
+            normalize_voice, normalize_upload,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
             load as load_cfg, save as save_cfg,
@@ -3066,6 +3598,13 @@ class ShareServer:
                 k: v for k, v in merged.get("voice", {}).items()
                 if k in VoiceConfig.__dataclass_fields__
             }),
+            upload=UploadConfig(**{
+                k: v for k, v in merged.get("upload", {}).items()
+                if k in UploadConfig.__dataclass_fields__
+                # Servers change through /api/upload/servers only, so a
+                # settings save from a stale page cannot drop one.
+                and k != "servers"
+            }, servers=list(persisted_cfg.upload.servers)),
         )
         try:
             validate_hotkeys(new_cfg.hotkeys)
@@ -3077,6 +3616,7 @@ class ShareServer:
         normalize_notifications(new_cfg)
         normalize_sharing(new_cfg)
         normalize_voice(new_cfg)
+        normalize_upload(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
         image_dir_changed = (
@@ -3102,7 +3642,7 @@ class ShareServer:
         # carry it across so self.cfg still matches what is on disk.
         # "notifications" is read each time a sound plays (#297).
         for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui", "overlay",
-                      "notifications", "voice"):
+                      "notifications", "voice", "upload"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
         apply_error: str | None = None

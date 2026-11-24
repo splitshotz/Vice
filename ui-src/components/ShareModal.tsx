@@ -44,6 +44,8 @@ export function ShareModal({
   const [copy, setCopy] = useState<DiscordCopy | null>(null);
   const [failed, setFailed] = useState('');
   const slug = clip?.slug;
+  // No file here to encode a Discord copy from.
+  const cloudOnly = Boolean(clip?.cloud && !clip.cloud.local);
 
   // The file has to exist on disk before the drag starts: a dragstart handler
   // cannot wait for an encode, so it is built when the sheet opens.
@@ -53,6 +55,10 @@ export function ShareModal({
     setConfirmNew(false);
     setCopy(null);
     setFailed('');
+    if (cloudOnly) {
+      setFailed(t('cloud.shareNoFile'));
+      return;
+    }
     void api
       .discordCopy(slug)
       .then(result => {
@@ -64,7 +70,7 @@ export function ShareModal({
     return () => {
       cancelled = true;
     };
-  }, [slug]);
+  }, [slug, cloudOnly]);
 
   // Held through the closing animation, or the sheet would empty itself out
   // one frame before it fades.
@@ -96,8 +102,12 @@ export function ShareModal({
       <div className="share-sheet">
         <div className="share-link-row">
           <div className="share-link-head">
-            <span className="share-label">{t('viewer.shareHighQuality')}</span>
-            {link ? (
+            <span className="share-label">
+              {shown.cloud
+                ? t('cloud.shareFrom', {server: shown.cloud.server_name})
+                : t('viewer.shareHighQuality')}
+            </span>
+            {link && !shown.cloud ? (
               <button
                 type="button"
                 className="btn btn-quiet btn-sm"

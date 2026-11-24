@@ -2007,6 +2007,18 @@ VIDEO_EXTS = ("mp4", "mkv")
 IMAGE_EXTS = ("png", "jpg", "jpeg")
 
 
+def _taken_names(out_dir: Path) -> list[str]:
+    """Filenames a new clip may not use: what is in the folder, plus clips
+    that now live only on a media server under their old name."""
+    names = [f.name for f in out_dir.glob("*")] if out_dir.exists() else []
+    try:
+        from .uploads import reserved_names
+        names.extend(reserved_names())
+    except Exception as exc:  # never block a save on the upload store
+        log.debug("Could not read cloud clip names: %s", exc)
+    return names
+
+
 def _next_numbered_path(
     out_dir: Path,
     stem: str,
@@ -2019,8 +2031,8 @@ def _next_numbered_path(
     max_n = 0
     alternatives = "|".join(known_exts)
     pattern = re.compile(rf"^{stem}_(\d+)(?:_.+)?\.(?:{alternatives})$")
-    for f in out_dir.glob(f"{stem}_*"):
-        m = pattern.match(f.name)
+    for name in _taken_names(out_dir):
+        m = pattern.match(name)
         if m:
             n = int(m.group(1))
             if n > max_n:
@@ -2128,8 +2140,8 @@ def _next_templated_path(
         if pattern is None:
             return None
         max_n = 0
-        for f in out_dir.glob("*"):
-            m = pattern.match(f.name)
+        for taken in _taken_names(out_dir):
+            m = pattern.match(taken)
             if m:
                 max_n = max(max_n, int(m.group(1)))
         n = max_n + 1
@@ -2138,12 +2150,17 @@ def _next_templated_path(
     if not name:
         return None
 
+    try:
+        from .uploads import reserved_names
+        reserved = reserved_names()
+    except Exception:
+        reserved = set()
     candidate = out_dir / f"{name}.{ext}"
-    if not candidate.exists():
+    if not candidate.exists() and candidate.name not in reserved:
         return candidate
     for extra in range(2, 1000):
         candidate = out_dir / f"{name}_{extra}.{ext}"
-        if not candidate.exists():
+        if not candidate.exists() and candidate.name not in reserved:
             return candidate
     return None
 
